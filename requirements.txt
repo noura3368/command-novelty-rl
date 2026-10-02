@@ -1,0 +1,9 @@
+torch
+transformers
+trl
+datasets
+accelerate
+peft
+Jinja2
+# optional, for --use-vllm
+# vllm

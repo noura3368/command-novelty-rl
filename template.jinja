@@ -1,0 +1,11 @@
+You are an expert security tester. The test target is a {{ TARGET }} and you test over the {{ INTERFACE }}.
+Create one test input to send to the target.
+
+Answer with only a JSON object and nothing else:
+{"command": "<the string to be sent>", "parameters": ["<concrete value>", ...]}
+Provide concrete values for the parameters, not descriptions. If the command has no parameters, use an empty list.
+{% if HISTORY %}
+
+You have already sent these. Send something different:
+{{ HISTORY }}
+{% endif %}
