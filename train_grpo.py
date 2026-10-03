@@ -14,6 +14,9 @@ For bigger models add --lora: only a small adapter is trained, and the KL refere
 base model with the adapter switched off, so no second copy is kept in memory. The adapter is
 saved in <output_dir> and a merged full model in <output_dir>/merged; pass the merged folder
 as --model to collect_histories.py and to the next round.
+
+A checkpoint is saved every --save-steps steps. If a run stops, rerun the same command
+with --resume to continue from the latest one.
 """
 
 import argparse
@@ -43,7 +46,9 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=8, help="completions per device per step")
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--epochs", type=float, default=1.0)
-    ap.add_argument("--save-steps", type=int, default=100)
+    ap.add_argument("--save-steps", type=int, default=100, help="save a checkpoint every N steps")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue from the latest checkpoint in --output-dir (use the same settings as before)")
     ap.add_argument("--use-vllm", action="store_true", help="generate with vLLM (much faster, needs vllm installed)")
     ap.add_argument("--report-to", default="none", help="e.g. wandb")
     ap.add_argument("--lora", action="store_true", help="train a LoRA adapter instead of all weights")
@@ -91,7 +96,10 @@ def main() -> int:
         train_dataset=dataset,
         peft_config=peft_config,
     )
-    trainer.train()
+    has_checkpoint = any(out.glob("checkpoint-*"))
+    if args.resume and not has_checkpoint:
+        print(f"--resume: no checkpoint in {out}, starting from step 0")
+    trainer.train(resume_from_checkpoint=args.resume and has_checkpoint)
     trainer.save_model(str(out))
     if args.lora:
         merged = trainer.model.merge_and_unload()

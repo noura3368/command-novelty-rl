@@ -38,4 +38,6 @@ python train_grpo.py --model runs/round0/merged --histories histories_round1.jso
     --output-dir runs/round1 --lora
 ```
 
-`--lora` trains a small adapter instead of all weights, which is needed for 7B-class models on one GPU. Without it, all weights are trained (fine for ~1.5B). The reward groups samples by prompt, which assumes a single GPU.
+A checkpoint is saved every 100 steps (`--save-steps`). If training stops, rerun the same command with `--resume` to continue from the latest checkpoint.
+
+`--lora` trains a small adapter instead of all weights. Use it on a 24GB GPU for any size: training all weights of a 1.5B model already needs about 24GB. The reward groups samples by prompt, which assumes a single GPU.
