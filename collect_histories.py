@@ -32,6 +32,7 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=30, help="commands generated per episode")
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--max-new-tokens", type=int, default=64)
+    ap.add_argument("--batch-size", type=int, default=16, help="episodes generated at once on the GPU")
     ap.add_argument("--out", required=True, help="output JSONL")
     args = ap.parse_args()
 
@@ -50,11 +51,13 @@ def main() -> int:
             for e, h in enumerate(histories):
                 out.write(json.dumps({"episode": e, "step": step, "history": json.dumps(h)}) + "\n")
 
-            batch = tok(texts, return_tensors="pt", padding=True).to(device)
-            with torch.no_grad():
-                gen = model.generate(**batch, do_sample=True, temperature=args.temperature,
-                                     max_new_tokens=args.max_new_tokens, pad_token_id=tok.pad_token_id)
-            replies = tok.batch_decode(gen[:, batch["input_ids"].shape[1]:], skip_special_tokens=True)
+            replies = []
+            for i in range(0, len(texts), args.batch_size):
+                batch = tok(texts[i:i + args.batch_size], return_tensors="pt", padding=True).to(device)
+                with torch.no_grad():
+                    gen = model.generate(**batch, do_sample=True, temperature=args.temperature,
+                                         max_new_tokens=args.max_new_tokens, pad_token_id=tok.pad_token_id)
+                replies += tok.batch_decode(gen[:, batch["input_ids"].shape[1]:], skip_special_tokens=True)
 
             added = 0
             for h, reply in zip(histories, replies):
