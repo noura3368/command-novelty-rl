@@ -38,6 +38,23 @@ python train_grpo.py --model runs/round0/merged --histories histories_round1.jso
     --output-dir runs/round1 --lora
 ```
 
+## Evaluation
+
+`evaluate.py` runs each model through the same one-command loop (same prompt, settings and seed) and records, per step, the mean number of unique commands per list, the list length, and the share of broken / repeat / new-value / new-command answers. It writes `eval_steps.csv`, each model's final lists, and `discovery_curve.png`.
+
+```bash
+python evaluate.py --models Qwen/Qwen2.5-7B-Instruct runs/round0/merged --labels base round0 \
+    --steps 100 --out-dir eval/round0
+```
+
+## Hyperparameter sweep
+
+`sweep.py` builds one shared histories file and evaluates the base model, then keeps running random trials until `--hours` is used up. Each trial samples a learning rate (1e-6 to 1e-4, log scale), `beta` (0 to 0.1) and training temperature (0.8 to 1.3), trains a LoRA adapter for `--trial-steps` updates, evaluates it, and appends a row to `trials.csv`. Rerunning the same command continues after the last finished trial.
+
+```bash
+python sweep.py --model Qwen/Qwen2.5-3B-Instruct --hours 20 --out-dir sweeps/qwen3b
+```
+
 A checkpoint is saved every 100 steps (`--save-steps`). If training stops, rerun the same command with `--resume` to continue from the latest checkpoint.
 
 `--lora` trains a small adapter instead of all weights. Use it on a 24GB GPU for any size: training all weights of a 1.5B model already needs about 24GB. The reward groups samples by prompt, which assumes a single GPU.

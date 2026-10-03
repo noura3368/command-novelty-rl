@@ -46,6 +46,8 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=8, help="completions per device per step")
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--epochs", type=float, default=1.0)
+    ap.add_argument("--max-steps", type=int, default=-1, help="stop after N updates (overrides --epochs)")
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save-steps", type=int, default=100, help="save a checkpoint every N steps")
     ap.add_argument("--resume", action="store_true",
                     help="continue from the latest checkpoint in --output-dir (use the same settings as before)")
@@ -63,7 +65,7 @@ def main() -> int:
                 r = json.loads(line)
                 rows.append({"prompt": build_messages(args.target, args.interface, json.loads(r["history"])),
                              "history": r["history"]})
-    dataset = Dataset.from_list(rows).shuffle(seed=0)
+    dataset = Dataset.from_list(rows).shuffle(seed=args.seed)
     print(f"{len(rows)} prompts from {len(args.histories)} file(s)")
 
     out = Path(args.output_dir)
@@ -78,6 +80,8 @@ def main() -> int:
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
         num_train_epochs=args.epochs,
+        max_steps=args.max_steps,
+        seed=args.seed,
         logging_steps=1,
         save_steps=args.save_steps,
         bf16=torch.cuda.is_available(),

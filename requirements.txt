@@ -5,5 +5,6 @@ datasets
 accelerate
 peft
 Jinja2
+matplotlib
 # optional, for --use-vllm
 # vllm
