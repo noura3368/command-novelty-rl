@@ -50,10 +50,19 @@ def sample(rng):
 
 
 def run(cmd, log_path):
-    """Run a script with its output going to log_path. Returns True on success."""
+    """Run a script, showing its output on screen and saving a copy to log_path. Returns True on success.
+
+    Output is passed through as raw bytes so progress bars redraw in place.
+    """
     print("  $", " ".join(map(str, cmd)), flush=True)
-    with open(log_path, "w", encoding="utf-8") as log:
-        return subprocess.run([sys.executable, *map(str, cmd)], stdout=log, stderr=subprocess.STDOUT).returncode == 0
+    with open(log_path, "wb") as log:
+        proc = subprocess.Popen([sys.executable, "-u", *map(str, cmd)],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        while chunk := proc.stdout.read1(4096):
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+            log.write(chunk)
+        return proc.wait() == 0
 
 
 def eval_summary(eval_dir, label):
