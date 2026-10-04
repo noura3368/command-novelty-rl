@@ -1,0 +1,59 @@
+# W&B sweep for Qwen2.5-7B: Bayesian search over the training values below.
+#   ./prepare_sweep.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b   -> the histories and base eval below
+#   wandb sweep sweep_7b.yaml                                -> prints the sweep id
+#   wandb agent --count 30 <entity/project/id>
+# Run the agents from the repo folder (one per GPU). The paths below are relative to it.
+# sweep_3b.yaml differs only in the model and paths: keep the other values in step.
+program: wandb_trial.py
+project: command-novelty-rl
+name: qwen2.5-7b
+method: bayes
+metric:
+  name: final_unique_commands
+  goal: maximize
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+parameters:
+  # searched
+  lr:
+    distribution: log_uniform_values
+    min: 1.0e-6
+    max: 1.0e-4
+  beta:
+    distribution: uniform
+    min: 0.0
+    max: 0.1
+  temperature:
+    distribution: uniform
+    min: 0.8
+    max: 1.3
+  num_generations:
+    values: [4, 8, 16]                    # GRPO group size; 32 completions per step either way
+  # fixed: the same in every trial
+  model:
+    value: Qwen/Qwen2.5-7B-Instruct
+  target:
+    value: KORAD KA3005P Power Supply
+  interface:
+    value: RS232 interface
+  histories:
+    value: sweeps/7b/histories.jsonl
+  base_eval:
+    value: sweeps/7b/base_eval/eval_steps.csv
+  out_dir:
+    value: sweeps/7b/wandb
+  trial_steps:
+    value: 150
+  sample_every:
+    value: 10
+  # evaluation, must match prepare_sweep.sh so the base curve is comparable
+  eval_episodes:
+    value: 16
+  eval_length:                            # commands per eval list (evaluate.py --steps)
+    value: 60
+  batch_size:
+    value: 16
+  seed:
+    value: 0

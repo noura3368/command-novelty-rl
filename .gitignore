@@ -4,3 +4,4 @@ __pycache__/
 runs/
 histories*.jsonl
 wandb/
+sweeps/

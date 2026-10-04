@@ -15,6 +15,10 @@ base model with the adapter switched off, so no second copy is kept in memory. T
 saved in <output_dir> and a merged full model in <output_dir>/merged; pass the merged folder
 as --model to collect_histories.py and to the next round.
 
+With --report-to wandb, --log-completions adds TRL's per-step completions table (with each
+completion's tier and parsed command) and --sample-every N adds a `samples` table holding two
+whole groups every N steps; see make_reward_fn in reward.py for the extra metrics.
+
 A checkpoint is saved every --save-steps steps. If a run stops, rerun the same command
 with --resume to continue from the latest one.
 """
@@ -53,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="continue from the latest checkpoint in --output-dir (use the same settings as before)")
     ap.add_argument("--use-vllm", action="store_true", help="generate with vLLM (much faster, needs vllm installed)")
     ap.add_argument("--report-to", default="none", help="e.g. wandb")
+    ap.add_argument("--log-completions", action="store_true",
+                    help="log every step's completions to the --report-to backend (and print a few)")
+    ap.add_argument("--sample-every", type=int, default=0,
+                    help="add two whole groups to the W&B `samples` table every N steps (0: off)")
     ap.add_argument("--lora", action="store_true", help="train a LoRA adapter instead of all weights")
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
@@ -90,6 +98,8 @@ def train(args) -> GRPOTrainer:
         bf16=torch.cuda.is_available(),
         use_vllm=args.use_vllm,
         report_to=args.report_to,
+        log_completions=args.log_completions,
+        num_completions_to_print=4,
     )
     peft_config = None
     if args.lora:
@@ -98,7 +108,7 @@ def train(args) -> GRPOTrainer:
                                  task_type="CAUSAL_LM")
     trainer = GRPOTrainer(
         model=args.model,
-        reward_funcs=make_reward_fn(out / "samples.jsonl"),
+        reward_funcs=make_reward_fn(out / "samples.jsonl", sample_every=args.sample_every),
         args=config,
         train_dataset=dataset,
         peft_config=peft_config,

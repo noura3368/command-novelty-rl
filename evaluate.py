@@ -7,9 +7,11 @@ same seed): --episodes independent lists, one command per list per step, each ne
 command appended to its list. Per step it records, averaged over the lists:
 
     unique commands     distinct `command` values in the list (the main number)
+    plausible unique    the same, counting only commands that pass reward.plausible_syntax
     entries             list length (distinct command + parameters pairs)
     tier rates          share of replies that were broken / repeat / new_value / new_structure,
                         judged against the list before the reply (same rules as reward.py)
+    reward              mean and sd of the reward each reply would get as a group of one
 
 Writes <out-dir>/eval_steps.csv, <out-dir>/<label>_histories.jsonl (final lists),
 and <out-dir>/discovery_curve.png.
@@ -28,9 +30,7 @@ from pathlib import Path
 import torch
 
 from collect_histories import load_model, run_episodes
-from reward import score_group
-
-TIERS = ["broken", "repeat", "new_value", "new_structure"]
+from reward import TIERS, plausible_syntax, score_group
 
 # Categorical slots in fixed order (light surface); a model keeps its slot by position.
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
@@ -59,13 +59,19 @@ def evaluate_loaded(model, tok, model_id, label, args):
     for step, before, replies, after in run_episodes(model, tok, args.target, args.interface, args.episodes,
                                                      args.steps, args.temperature, args.max_new_tokens,
                                                      args.batch_size):
-        tiers = [score_group([r], b)[0][0] for r, b in zip(replies, before)]
+        scored = [score_group([r], b)[0] for r, b in zip(replies, before)]
+        tiers = [t for t, _, _ in scored]
+        rewards = [r for _, r, _ in scored]
         unique = [len({x["command"] for x in h}) for h in after]
         row = {
             "label": label, "model": model_id, "step": step + 1,
             "mean_unique_commands": statistics.mean(unique),
             "std_unique_commands": statistics.pstdev(unique),
+            "mean_plausible_unique_commands": statistics.mean(
+                len({x["command"] for x in h if plausible_syntax(x["command"])}) for h in after),
             "mean_entries": statistics.mean(len(h) for h in after),
+            "mean_reward": statistics.mean(rewards),
+            "std_reward": statistics.pstdev(rewards),
         }
         for t in TIERS:
             row[f"{t}_rate"] = tiers.count(t) / len(tiers)

@@ -1,10 +1,16 @@
 torch
-transformers
-trl
-datasets
+# pinned to the versions on the lab machines: TRL's logged metric names and the
+# reward function's log_extra / log_metric hooks depend on them
+transformers==5.18.0
+trl==1.14.1
+datasets==5.0.1
 accelerate
-peft
+peft==0.21.2
 Jinja2
 matplotlib
+# W&B sweeps (wandb_trial.py) and TRL's completions table
+wandb==0.30.0
+pandas
+rich
 # optional, for --use-vllm
 # vllm
