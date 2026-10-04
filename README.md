@@ -61,12 +61,15 @@ python sweep.py --model Qwen/Qwen2.5-3B-Instruct --hours 20 --out-dir sweeps/qwe
 
 ```bash
 wandb login                                                    # once per machine
-CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 ./prepare_sweep.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b
-wandb sweep sweep_3b.yaml                                      # prints <entity/project/id>
-CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 wandb agent --count 30 <entity/project/id>
+export CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+./prepare_sweep.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b         # 7B: ./prepare_sweep.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b 8
+wandb sweep sweep_3b.yaml                                      # prints "wandb agent <entity>/command-novelty-rl/<id>"
+wandb agent --count 30 <entity>/command-novelty-rl/<id>        # the id form, not the sweep's web URL
 ```
 
-Run the agents from the repo folder, one per GPU; several agents can share one sweep id. `CUDA_DEVICE_ORDER=PCI_BUS_ID` makes the GPU numbers match `nvidia-smi`.
+Run the agents from the repo folder, one per GPU; several agents can share one sweep id. `CUDA_DEVICE_ORDER=PCI_BUS_ID` makes the GPU numbers match `nvidia-smi`. The optional third argument of `prepare_sweep.sh` is how many lists are generated at once; it must match `batch_size` in the YAML (16 for 3B, 8 for 7B, whose long prompts at 16 exhausted the GB10's shared memory).
+
+Memory: with prompts of up to ~2,500 tokens, a 3B trial peaks at about 14 GB on one GPU. Each update uses 32 completions, run as 8 micro-batches of 4 (`micro_batch`, `grad_accum`) and generated 16 at a time (`generation_batch`); generating all 32 at once does not fit next to other jobs on a 24 GB A5000.
 
 What each run logs:
 

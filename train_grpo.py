@@ -49,6 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--beta", type=float, default=0.04, help="KL penalty to the base model")
     ap.add_argument("--batch-size", type=int, default=8, help="completions per device per step")
     ap.add_argument("--grad-accum", type=int, default=4)
+    ap.add_argument("--generation-batch-size", type=int, default=None,
+                    help="completions generated at once (default: --batch-size x --grad-accum, one update's worth); "
+                         "lower it if generation runs out of memory on long prompts")
     ap.add_argument("--epochs", type=float, default=1.0)
     ap.add_argument("--max-steps", type=int, default=-1, help="stop after N updates (overrides --epochs)")
     ap.add_argument("--seed", type=int, default=0)
@@ -90,12 +93,15 @@ def train(args) -> GRPOTrainer:
         beta=args.beta,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
+        generation_batch_size=args.generation_batch_size,
         num_train_epochs=args.epochs,
         max_steps=args.max_steps,
         seed=args.seed,
         logging_steps=1,
         save_steps=args.save_steps,
         bf16=torch.cuda.is_available(),
+        # TRL would load the base model in fp32 (12 GB for 3B); bf16 matches collect_histories.load_model.
+        model_init_kwargs={"dtype": "bfloat16" if torch.cuda.is_available() else "float32"},
         use_vllm=args.use_vllm,
         report_to=args.report_to,
         log_completions=args.log_completions,

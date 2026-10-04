@@ -15,7 +15,7 @@ python collect_histories.py --model Qwen/Qwen2.5-7B-Instruct --out histories_rou
 python train_grpo.py --model Qwen/Qwen2.5-7B-Instruct --histories histories_round0.jsonl --output-dir runs/round0 --lora
 python evaluate.py --models Qwen/Qwen2.5-7B-Instruct runs/round0/merged --labels base round0 --steps 100 --out-dir eval/round0
 python sweep.py --model Qwen/Qwen2.5-3B-Instruct --hours 20 --out-dir sweeps/qwen3b       # local random sweep, resumable
-./prepare_sweep.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b                                     # inputs for the W&B sweep
+./prepare_sweep.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b [batch_size]                        # inputs for the W&B sweep
 wandb sweep sweep_3b.yaml && wandb agent --count 30 <entity/project/id>                  # W&B Bayesian sweep (run from repo root)
 ```
 
@@ -37,6 +37,7 @@ With `--lora`, `train_grpo.py` saves the adapter in `<output_dir>` and a merged 
   - `sweep.py` drives the other scripts as **subprocesses via their CLI flags**, so renaming a flag in `train_grpo.py` / `evaluate.py` / `collect_histories.py` breaks it. Resume works by replaying the RNG for the trials already in `trials.csv`. Changing `RANGES` or its order changes the configs a resumed run samples.
   - `wandb_trial.py` (launched by `wandb agent` per `sweep_3b.yaml` / `sweep_7b.yaml`) imports `build_parser`/`train` from `train_grpo.py` and `evaluate_loaded`/`plot` from `evaluate.py`. It evaluates the merged model in memory. The sweep metric is `final_unique_commands`. The paths in the sweep YAML (histories, base eval CSV) are created beforehand by `prepare_sweep.sh`, whose eval settings must match the YAML's.
   - `wandb_trial.py` copies `run.config` into a namespace **before** training, because the transformers W&B callback writes all `GRPOConfig` fields into `run.config` and overwrites same-named keys (that is why the sweep key is `eval_length`, not `eval_steps`). Don't name new sweep keys after `TrainingArguments`/`GRPOConfig` fields.
+- **GPU memory**: TRL loads a model given by name in fp32 unless told otherwise, so `train_grpo.py` passes `model_init_kwargs={"dtype": "bfloat16"}` on CUDA. The peak is in TRL's generation step (prefill of long history prompts, with PEFT's fp32 LoRA path), not in backprop; `--generation-batch-size` bounds it independently of `--batch-size`/`--grad-accum`, and must be divisible by `--num-generations`. sf's A5000s are shared with an `ollama` server (~4 GB per GPU).
 - **W&B logging** goes through TRL 1.14's reward-function hooks. `make_reward_fn` takes `trainer_state`, `log_extra` (adds `tier`/`command`/`parameters` columns to TRL's `completions` table, enabled by `--log-completions`) and `log_metric` (the `tier/*` and `novelty/*` metrics, averaged per logging step next to `reward`/`reward_std`). With `--sample-every N` it also re-logs a growing `samples` W&B table with `commit=False`, so it attaches to the next trainer log.
 
 ## Conventions to keep consistent

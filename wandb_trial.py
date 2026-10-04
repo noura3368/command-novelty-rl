@@ -31,7 +31,9 @@ def main() -> int:
     run = wandb.init()
     # Copy the sweep's values now: TRL's W&B callback later writes its own settings into run.config,
     # and some names overlap (TrainingArguments has eval_steps, seed, ...).
-    c = SimpleNamespace(**{"num_generations": 8, "sample_every": 10, "base_eval": None, **dict(run.config)})
+    defaults = {"num_generations": 8, "sample_every": 10, "base_eval": None,
+                "micro_batch": 4, "grad_accum": 8, "generation_batch": 16}
+    c = SimpleNamespace(**{**defaults, **dict(run.config)})
     out = Path(c.out_dir) / run.id
 
     args = build_parser().parse_args([
@@ -40,6 +42,8 @@ def main() -> int:
         "--lora", "--max-steps", str(c.trial_steps), "--save-steps", str(10 ** 9), "--seed", str(c.seed),
         "--lr", str(c.lr), "--beta", str(c.beta), "--temperature", str(c.temperature),
         "--num-generations", str(c.num_generations),
+        "--batch-size", str(c.micro_batch), "--grad-accum", str(c.grad_accum),
+        "--generation-batch-size", str(c.generation_batch),
         "--report-to", "wandb", "--log-completions", "--sample-every", str(c.sample_every),
     ])
     trainer = train(args)

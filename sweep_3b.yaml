@@ -48,12 +48,18 @@ parameters:
     value: 150
   sample_every:
     value: 10
+  micro_batch:                            # completions per forward/backward pass
+    value: 4
+  grad_accum:                             # micro-batches per update: 4 x 8 = 32 completions per step
+    value: 8
+  generation_batch:                       # completions generated at once (twice per update); 32 runs out of memory on an A5000
+    value: 16
   # evaluation, must match prepare_sweep.sh so the base curve is comparable
   eval_episodes:
     value: 16
   eval_length:                            # commands per eval list (evaluate.py --steps)
     value: 60
-  batch_size:
+  batch_size:                             # lists generated at once in eval; pass the same to prepare_sweep.sh
     value: 16
   seed:
     value: 0
