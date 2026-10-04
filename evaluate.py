@@ -43,8 +43,18 @@ def default_label(model_id: str) -> str:
 
 
 def evaluate_model(model_id, label, args):
-    torch.manual_seed(args.seed)
     model, tok = load_model(model_id)
+    rows = evaluate_loaded(model, tok, model_id, label, args)
+    del model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return rows
+
+
+def evaluate_loaded(model, tok, model_id, label, args):
+    """Run the loop with an already loaded model; write <label>_histories.jsonl and return the per-step rows."""
+    torch.manual_seed(args.seed)
     rows, final = [], None
     for step, before, replies, after in run_episodes(model, tok, args.target, args.interface, args.episodes,
                                                      args.steps, args.temperature, args.max_new_tokens,
@@ -67,11 +77,6 @@ def evaluate_model(model_id, label, args):
     with open(args.out_dir / f"{label}_histories.jsonl", "w", encoding="utf-8") as f:
         for e, h in enumerate(final):
             f.write(json.dumps({"episode": e, "history": h}) + "\n")
-
-    del model
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
     return rows
 
 

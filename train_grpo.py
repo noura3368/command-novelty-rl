@@ -31,7 +31,7 @@ from prompting import build_messages
 from reward import make_reward_fn
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", required=True, help="HF model id or local checkpoint")
     ap.add_argument("--histories", nargs="+", required=True, help="JSONL files from collect_histories.py")
@@ -56,8 +56,11 @@ def main() -> int:
     ap.add_argument("--lora", action="store_true", help="train a LoRA adapter instead of all weights")
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
-    args = ap.parse_args()
+    return ap
 
+
+def train(args) -> GRPOTrainer:
+    """Train on the histories and save the result (the adapter, with --lora) in --output-dir."""
     rows = []
     for path in args.histories:
         with open(path, encoding="utf-8") as f:
@@ -105,6 +108,13 @@ def main() -> int:
         print(f"--resume: no checkpoint in {out}, starting from step 0")
     trainer.train(resume_from_checkpoint=args.resume and has_checkpoint)
     trainer.save_model(str(out))
+    return trainer
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    trainer = train(args)
+    out = Path(args.output_dir)
     if args.lora:
         merged = trainer.model.merge_and_unload()
         merged.save_pretrained(str(out / "merged"))
