@@ -1,12 +1,12 @@
 # W&B sweep for Qwen2.5-7B: Bayesian search over the training values below.
-#   ./prepare_sweep.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b 8 -> the histories and base eval below
+#   ./prepare_sweep.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b-v2 8 -> the histories and base eval below
 #   wandb sweep sweep_7b.yaml                                -> prints the sweep id
-#   wandb agent --count 30 <entity/project/id>
+#   wandb agent --count 15 <entity/project/id>
 # Run the agents from the repo folder (one per GPU). The paths below are relative to it.
 # sweep_3b.yaml differs only in the model and paths: keep the other values in step.
 program: wandb_trial.py
 project: command-novelty-rl
-name: qwen2.5-7b
+name: qwen2.5-7b-v2
 method: bayes
 metric:
   name: final_unique_commands
@@ -19,7 +19,7 @@ parameters:
   # searched
   lr:
     distribution: log_uniform_values
-    min: 1.0e-6
+    min: 1.0e-5                           # below this, pilot sweeps (v1) barely learned
     max: 1.0e-4
   beta:
     distribution: uniform
@@ -39,11 +39,11 @@ parameters:
   interface:
     value: RS232 interface
   histories:
-    value: sweeps/7b/histories.jsonl
+    value: sweeps/7b-v2/histories.jsonl
   base_eval:
-    value: sweeps/7b/base_eval/eval_steps.csv
+    value: sweeps/7b-v2/base_eval/eval_steps.csv
   out_dir:
-    value: sweeps/7b/wandb
+    value: sweeps/7b-v2/wandb
   trial_steps:
     value: 150
   sample_every:
@@ -57,8 +57,8 @@ parameters:
   # evaluation, must match prepare_sweep.sh so the base curve is comparable
   eval_episodes:
     value: 16
-  eval_length:                            # commands per eval list (evaluate.py --steps)
-    value: 60
+  eval_length:                            # commands per eval list (evaluate.py --steps); 60 saturated in v1
+    value: 150
   batch_size:                             # lists generated at once in eval; pass the same to prepare_sweep.sh
     value: 8
   seed:

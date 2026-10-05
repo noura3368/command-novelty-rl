@@ -9,11 +9,15 @@ history shown in its own prompt:
 
     not one JSON object / empty command      broken          -6
     same command and same parameters seen    repeat          -1
-    command seen, parameters new             new_value       +0.5
+    command seen, parameters new             new_value       -1
     command never seen                       new_structure   +5 / k
 
 k is the number of completions in the same group (same prompt) that produced
 the same new command, so a group that all finds the same thing shares one bonus.
+Only new command names are rewarded: new parameters on a known command score like a
+repeat (anything above -1 would still be reinforced relative to repeats in a GRPO group).
+new_value stays a separate tier so the logs show how often the model tries it.
+Novelty of parameters is a separate problem, deliberately left out.
 Gibberish commands count like any other: only novelty is rewarded.
 `plausible_syntax` is a rough check for that, used only in logging, never in the reward.
 """
@@ -24,7 +28,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-REWARDS = {"broken": -6.0, "repeat": -1.0, "new_value": 0.5, "new_structure": 5.0}
+REWARDS = {"broken": -6.0, "repeat": -1.0, "new_value": -1.0, "new_structure": 5.0}
 TIERS = list(REWARDS)
 
 # Korad-style syntax: optional '*', upper-case letters, optional channel digits, then '?' or ':<value>'

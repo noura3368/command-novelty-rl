@@ -16,7 +16,7 @@ python train_grpo.py --model Qwen/Qwen2.5-7B-Instruct --histories histories_roun
 python evaluate.py --models Qwen/Qwen2.5-7B-Instruct runs/round0/merged --labels base round0 --steps 100 --out-dir eval/round0
 python sweep.py --model Qwen/Qwen2.5-3B-Instruct --hours 20 --out-dir sweeps/qwen3b       # local random sweep, resumable
 ./prepare_sweep.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b [batch_size]                        # inputs for the W&B sweep
-wandb sweep sweep_3b.yaml && wandb agent --count 30 <entity/project/id>                  # W&B Bayesian sweep (run from repo root)
+wandb sweep sweep_3b.yaml && wandb agent --count 15 <entity/project/id>                  # W&B Bayesian sweep (run from repo root)
 ```
 
 Sweeps run on two lab machines over SSH: `ssh sf` (conda env `novelty-command`; Qwen2.5-3B; RTX A5000s are `nvidia-smi` GPUs 1 and 2, GPU 0 is a Quadro K620 that must not be used, so set `CUDA_DEVICE_ORDER=PCI_BUS_ID`) and `ssh nkhajehn@dgx2.esg.uwaterloo.ca` (conda env `novelty-rl`; Qwen2.5-7B; one GB10). Non-interactive SSH shells do not have conda on PATH; use `~/miniconda3/envs/<env>/bin/python`. Package versions in `requirements.txt` are pinned to what those envs have.

@@ -1,12 +1,12 @@
 # W&B sweep for Qwen2.5-3B: Bayesian search over the training values below.
-#   ./prepare_sweep.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b   -> the histories and base eval below
+#   ./prepare_sweep.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b-v2   -> the histories and base eval below
 #   wandb sweep sweep_3b.yaml                                -> prints the sweep id
-#   CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 wandb agent --count 30 <entity/project/id>
+#   CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 wandb agent --count 15 <entity/project/id>
 # Run the agents from the repo folder (one per GPU). The paths below are relative to it.
 # sweep_7b.yaml differs only in the model and paths: keep the other values in step.
 program: wandb_trial.py
 project: command-novelty-rl
-name: qwen2.5-3b
+name: qwen2.5-3b-v2
 method: bayes
 metric:
   name: final_unique_commands
@@ -19,7 +19,7 @@ parameters:
   # searched
   lr:
     distribution: log_uniform_values
-    min: 1.0e-6
+    min: 1.0e-5                           # below this, pilot sweeps (v1) barely learned
     max: 1.0e-4
   beta:
     distribution: uniform
@@ -39,11 +39,11 @@ parameters:
   interface:
     value: RS232 interface
   histories:
-    value: sweeps/3b/histories.jsonl
+    value: sweeps/3b-v2/histories.jsonl
   base_eval:
-    value: sweeps/3b/base_eval/eval_steps.csv
+    value: sweeps/3b-v2/base_eval/eval_steps.csv
   out_dir:
-    value: sweeps/3b/wandb
+    value: sweeps/3b-v2/wandb
   trial_steps:
     value: 150
   sample_every:
@@ -52,13 +52,13 @@ parameters:
     value: 4
   grad_accum:                             # micro-batches per update: 4 x 8 = 32 completions per step
     value: 8
-  generation_batch:                       # completions generated at once (twice per update); 32 runs out of memory on an A5000
-    value: 16
+  generation_batch:                       # completions generated at once, raised to num_generations if smaller;
+    value: 8                              # 16 ran out of memory at group size 4 next to sf's two ollama servers
   # evaluation, must match prepare_sweep.sh so the base curve is comparable
   eval_episodes:
     value: 16
-  eval_length:                            # commands per eval list (evaluate.py --steps)
-    value: 60
+  eval_length:                            # commands per eval list (evaluate.py --steps); 60 saturated in v1
+    value: 150
   batch_size:                             # lists generated at once in eval; pass the same to prepare_sweep.sh
     value: 16
   seed:

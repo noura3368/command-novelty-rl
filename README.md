@@ -14,10 +14,10 @@ The prompt lists everything already sent ("Do NOT create entries with these comm
 |---|---|
 | Not a single JSON object, or empty command | -6 |
 | Same command and parameters as an entry in the list | -1 |
-| Command in the list, new parameters | +0.5 |
+| Command in the list, new parameters | -1 |
 | Command not in the list | +5, split across the group samples that found the same one |
 
-Correctness is not rewarded, so gibberish commands count like any other. The values are in `REWARDS` in `reward.py`.
+Only new command names are rewarded. New parameters score like a repeat: parameter novelty is a separate problem (values have an order, 3 < 4 < 5; commands do not), and any reward above -1 would still push the model toward it. Correctness is not rewarded, so gibberish commands count like any other. The values are in `REWARDS` in `reward.py`.
 
 ## Pipeline
 
@@ -57,19 +57,19 @@ python sweep.py --model Qwen/Qwen2.5-3B-Instruct --hours 20 --out-dir sweeps/qwe
 
 ### W&B sweep
 
-`sweep_3b.yaml` and `sweep_7b.yaml` run a Bayesian W&B sweep over the learning rate, `beta`, training temperature and `num_generations` (4, 8 or 16), maximizing `final_unique_commands`. `wandb agent` starts `wandb_trial.py` once per trial: it trains a LoRA adapter for 150 updates, evaluates it with the same loop as `evaluate.py`, and logs everything to the run. Each sweep needs its shared histories and the base model's evaluation first; `prepare_sweep.sh` builds both and skips what already exists.
+`sweep_3b.yaml` and `sweep_7b.yaml` run a Bayesian W&B sweep over the learning rate (1e-5 to 1e-4), `beta`, training temperature and `num_generations` (4, 8 or 16), maximizing `final_unique_commands`. `wandb agent` starts `wandb_trial.py` once per trial: it trains a LoRA adapter for 150 updates, evaluates it with the same loop as `evaluate.py` (16 lists of 150 commands; the earlier 60 let both models reach the maximum of 60), and logs everything to the run. Each sweep needs its shared histories and the base model's evaluation first; `prepare_sweep.sh` builds both and skips what already exists.
 
 ```bash
 wandb login                                                    # once per machine
 export CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ./prepare_sweep.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b         # 7B: ./prepare_sweep.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b 8
 wandb sweep sweep_3b.yaml                                      # prints "wandb agent <entity>/command-novelty-rl/<id>"
-wandb agent --count 30 <entity>/command-novelty-rl/<id>        # the id form, not the sweep's web URL
+wandb agent --count 15 <entity>/command-novelty-rl/<id>        # the id form, not the sweep's web URL
 ```
 
 Run the agents from the repo folder, one per GPU; several agents can share one sweep id. `CUDA_DEVICE_ORDER=PCI_BUS_ID` makes the GPU numbers match `nvidia-smi`. The optional third argument of `prepare_sweep.sh` is how many lists are generated at once; it must match `batch_size` in the YAML (16 for 3B, 8 for 7B, whose long prompts at 16 exhausted the GB10's shared memory).
 
-Memory: with prompts of up to ~2,500 tokens, a 3B trial peaks at about 14 GB on one GPU. Each update uses 32 completions, run as 8 micro-batches of 4 (`micro_batch`, `grad_accum`) and generated 16 at a time (`generation_batch`); generating all 32 at once does not fit next to other jobs on a 24 GB A5000.
+Memory: with prompts of up to ~2,500 tokens, a 3B trial peaks at about 14 GB on one GPU. Each update uses 32 completions, run as 8 micro-batches of 4 (`micro_batch`, `grad_accum`) and generated `generation_batch` at a time (but at least one whole group, `num_generations`). sf's GPU 2 is shared with two ollama servers (about 10 GB), so the 3B sweep generates 8 at a time; at 16, group size 4 trials ran out of memory.
 
 What each run logs:
 

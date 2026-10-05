@@ -43,7 +43,7 @@ def main() -> int:
         "--lr", str(c.lr), "--beta", str(c.beta), "--temperature", str(c.temperature),
         "--num-generations", str(c.num_generations),
         "--batch-size", str(c.micro_batch), "--grad-accum", str(c.grad_accum),
-        "--generation-batch-size", str(c.generation_batch),
+        "--generation-batch-size", str(max(c.generation_batch, c.num_generations)),
         "--report-to", "wandb", "--log-completions", "--sample-every", str(c.sample_every),
     ])
     trainer = train(args)
