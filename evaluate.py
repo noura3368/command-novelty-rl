@@ -77,8 +77,9 @@ def evaluate_loaded(model, tok, model_id, label, args):
             row[f"{t}_rate"] = tiers.count(t) / len(tiers)
         rows.append(row)
         final = after
+        mem = f", {torch.cuda.max_memory_reserved() / 2**30:.1f} GB peak reserved" if torch.cuda.is_available() else ""
         print(f"[{label}] step {step + 1}/{args.steps}: {row['mean_unique_commands']:.2f} unique commands, "
-              f"{row['broken_rate']:.0%} broken", flush=True)
+              f"{row['broken_rate']:.0%} broken{mem}", flush=True)
 
     with open(args.out_dir / f"{label}_histories.jsonl", "w", encoding="utf-8") as f:
         for e, h in enumerate(final):

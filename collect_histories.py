@@ -59,6 +59,10 @@ def run_episodes(model, tok, target, interface, episodes, steps, temperature=1.0
             if p is None or any(x["command"] == p[0] and x["parameters"] == p[1] for x in h):
                 continue
             h.append({"command": p[0], "parameters": p[1]})
+        # Prompts grow every step, so cached blocks from earlier steps rarely fit later ones. On a GB10,
+        # whose GPU shares system memory, the cache grew until dgx2 ran out of memory around step 100.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         yield step, before, replies, histories
 
 
