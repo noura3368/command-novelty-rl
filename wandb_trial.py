@@ -81,19 +81,18 @@ def rescore(run_path: str) -> int:
           f"batch {c.batch_size}, seed {c.seed}", flush=True)
     base, tok = load_model(c.model)
     model = PeftModel.from_pretrained(base, str(out)).merge_and_unload().eval()
-    run.tags = sorted(set(run.tags) | {"rescored"})
-    run.notes = ((run.notes or "") + "\nEval failed during the sweep; final_* and eval/* were computed "
-                 "afterwards from the saved adapter (wandb_trial.py --rescore).").strip()
-    run.summary["rescored"] = True
-    evaluate_and_log(run, model, tok, c, out)
+    evaluate_and_log(run, model, tok, c, out, rescored=True)
     del model, base
     gc.collect()
     torch.cuda.empty_cache()
     return 0
 
 
-def evaluate_and_log(run, model, tok, c, out):
-    """Run the eval loop on a trained model and log curves, summaries and the discovery plot to the run."""
+def evaluate_and_log(run, model, tok, c, out, rescored=False):
+    """Run the eval loop on a trained model and log curves, summaries and the discovery plot to the run.
+
+    rescored=True marks the run (tag, summary flag, note) once its eval has succeeded.
+    """
     eval_dir = out / "eval"
     eval_dir.mkdir(parents=True, exist_ok=True)
     eval_args = SimpleNamespace(target=c.target, interface=c.interface, episodes=c.eval_episodes,
@@ -138,6 +137,11 @@ def evaluate_and_log(run, model, tok, c, out):
         "eval/discovery_curve": wandb.Image(str(eval_dir / "discovery_curve.png")),
         "eval/example_list": examples,
     })
+    if rescored:
+        run.tags = sorted(set(run.tags) | {"rescored"})
+        run.summary["rescored"] = True
+        run.notes = ((run.notes or "") + "\nEval failed during the sweep; final_* and eval/* were computed "
+                     "afterwards from the saved adapter (wandb_trial.py --rescore).").strip()
     run.finish()
 
 
