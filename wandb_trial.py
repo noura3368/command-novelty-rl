@@ -12,11 +12,19 @@ settings as evaluate.py; per-step eval curves go under eval/, and `final_unique_
 curve next to the base model's.
 
 Files per trial: <out_dir>/<run id>/ holds the adapter, samples.jsonl and eval/.
+
+A trial that finished training but failed during its eval (e.g. out of GPU memory) can be
+evaluated afterwards from its saved adapter, into the same W&B run. The run gets the tag
+`rescored` and summary `rescored: true`, so these scores can be told apart from the rest:
+
+    python wandb_trial.py --rescore <entity>/<project>/<run id>
 """
 
 import csv
+import gc
 import json
 import statistics
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -53,7 +61,39 @@ def main() -> int:
     tok.padding_side = "left"
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
+    evaluate_and_log(run, model, tok, c, out)
+    return 0
 
+
+def rescore(run_path: str) -> int:
+    """Evaluate a trial's saved adapter into its existing run, tagged `rescored`."""
+    import torch
+    from peft import PeftModel
+
+    from collect_histories import load_model
+
+    entity, project, run_id = run_path.split("/")
+    run = wandb.init(entity=entity, project=project, id=run_id, resume="must")
+    c = SimpleNamespace(**dict(run.config))
+    out = Path(c.out_dir) / run.id
+    print(f"rescoring {run.id}: {c.model} + {out}, lr={c.lr} beta={c.beta} temperature={c.temperature} "
+          f"num_generations={c.num_generations}; eval {c.eval_episodes} x {c.eval_length}, "
+          f"batch {c.batch_size}, seed {c.seed}", flush=True)
+    base, tok = load_model(c.model)
+    model = PeftModel.from_pretrained(base, str(out)).merge_and_unload().eval()
+    run.tags = sorted(set(run.tags) | {"rescored"})
+    run.notes = ((run.notes or "") + "\nEval failed during the sweep; final_* and eval/* were computed "
+                 "afterwards from the saved adapter (wandb_trial.py --rescore).").strip()
+    run.summary["rescored"] = True
+    evaluate_and_log(run, model, tok, c, out)
+    del model, base
+    gc.collect()
+    torch.cuda.empty_cache()
+    return 0
+
+
+def evaluate_and_log(run, model, tok, c, out):
+    """Run the eval loop on a trained model and log curves, summaries and the discovery plot to the run."""
     eval_dir = out / "eval"
     eval_dir.mkdir(parents=True, exist_ok=True)
     eval_args = SimpleNamespace(target=c.target, interface=c.interface, episodes=c.eval_episodes,
@@ -99,8 +139,9 @@ def main() -> int:
         "eval/example_list": examples,
     })
     run.finish()
-    return 0
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--rescore"]:
+        raise SystemExit(max(rescore(p) for p in sys.argv[2:]))
     raise SystemExit(main())
