@@ -7,9 +7,10 @@ the fixed settings both come from wandb.config. Training curves go to the W&B ru
 through TRL: reward / reward_std, kl, entropy, and the tier and novelty metrics from
 reward.py, plus the `completions` table every step and the `samples` table every
 `sample_every` steps. The trained model is evaluated in memory with the same loop and
-settings as evaluate.py; per-step eval curves go under eval/, and `final_unique_commands`
-(the sweep's metric) is logged at the end with the other summaries and the discovery
-curve next to the base model's.
+settings as evaluate.py; per-step eval curves go under eval/, and the final values
+(`final_unique_commands`, `final_first3_commands`, ...; the sweep YAML names the one it
+maximizes) are logged at the end with the other summaries and the discovery curve next
+to the base model's. A `version` value in the sweep config (e.g. v3) is added as a run tag.
 
 Files per trial: <out_dir>/<run id>/ holds the adapter, samples.jsonl and eval/.
 
@@ -43,6 +44,8 @@ def main() -> int:
                 "micro_batch": 4, "grad_accum": 8, "generation_batch": 16}
     c = SimpleNamespace(**{**defaults, **dict(run.config)})
     out = Path(c.out_dir) / run.id
+    if getattr(c, "version", None):
+        run.tags = tuple(sorted(set(run.tags) | {c.version}))
 
     args = build_parser().parse_args([
         "--model", c.model, "--histories", c.histories, "--output-dir", str(out),
@@ -110,6 +113,9 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
     for r in rows:
         wandb.log({"eval/step": r["step"], "eval/unique_commands": r["mean_unique_commands"],
                    "eval/plausible_unique_commands": r["mean_plausible_unique_commands"],
+                   "eval/first3_commands": r["mean_first3_commands"],
+                   "eval/real_commands": r["mean_real_commands"],
+                   "eval/median_name_length": r["median_name_length"],
                    "eval/reward_mean": r["mean_reward"], "eval/reward_std": r["std_reward"],
                    **{f"eval/{t}_rate": r[f"{t}_rate"] for t in TIERS}})
 
@@ -121,6 +127,8 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
         labels, plot_rows = ["base", "trained"], base + plot_rows
         summary["base_final_unique_commands"] = base[-1]["mean_unique_commands"]
         summary["gain_over_base"] = rows[-1]["mean_unique_commands"] - base[-1]["mean_unique_commands"]
+        if "mean_first3_commands" in base[-1]:
+            summary["base_final_first3_commands"] = base[-1]["mean_first3_commands"]
     plot(plot_rows, labels, eval_dir / "discovery_curve.png")
 
     with open(eval_dir / "trained_histories.jsonl", encoding="utf-8") as f:
@@ -132,6 +140,9 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
         **summary,
         "final_unique_commands": rows[-1]["mean_unique_commands"],
         "final_plausible_unique_commands": rows[-1]["mean_plausible_unique_commands"],
+        "final_first3_commands": rows[-1]["mean_first3_commands"],
+        "final_real_commands": rows[-1]["mean_real_commands"],
+        "final_median_name_length": rows[-1]["median_name_length"],
         "eval_reward_mean": statistics.mean(r["mean_reward"] for r in rows),
         **{f"{t}_rate": statistics.mean(r[f"{t}_rate"] for r in rows) for t in TIERS},
         "eval/discovery_curve": wandb.Image(str(eval_dir / "discovery_curve.png")),

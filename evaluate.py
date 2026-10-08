@@ -6,9 +6,12 @@ Each model explores exactly as in collect_histories.py (same prompt, same settin
 same seed): --episodes independent lists, one command per list per step, each new
 command appended to its list. Per step it records, averaged over the lists:
 
-    unique commands     distinct `command` values in the list (the main number)
+    unique commands     distinct `command` values in the list
+    first-3 commands    distinct first three words of the names (reward.head_words); discounts padding
     plausible unique    the same, counting only commands that pass reward.plausible_syntax
-    entries             list length (distinct command + parameters pairs)
+    real commands       distinct names in the documented KA3005P set (reward.ka3005p_command)
+    name length         median length of the names in the lists, in characters
+    entries             list length (one entry per command name)
     tier rates          share of replies that were broken / repeat / new_value / new_structure,
                         judged against the list before the reply (same rules as reward.py)
     reward              mean and sd of the reward each reply would get as a group of one
@@ -30,7 +33,7 @@ from pathlib import Path
 import torch
 
 from collect_histories import load_model, run_episodes
-from reward import TIERS, plausible_syntax, score_group
+from reward import TIERS, head_words, ka3005p_command, plausible_syntax, score_group
 
 # Categorical slots in fixed order (light surface); a model keeps its slot by position.
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
@@ -69,6 +72,10 @@ def evaluate_loaded(model, tok, model_id, label, args):
             "std_unique_commands": statistics.pstdev(unique),
             "mean_plausible_unique_commands": statistics.mean(
                 len({x["command"] for x in h if plausible_syntax(x["command"])}) for h in after),
+            "mean_first3_commands": statistics.mean(len({head_words(x["command"]) for x in h}) for h in after),
+            "mean_real_commands": statistics.mean(
+                len({x["command"] for x in h if ka3005p_command(x["command"])}) for h in after),
+            "median_name_length": statistics.median([len(x["command"]) for h in after for x in h] or [0]),
             "mean_entries": statistics.mean(len(h) for h in after),
             "mean_reward": statistics.mean(rewards),
             "std_reward": statistics.pstdev(rewards),
@@ -79,7 +86,7 @@ def evaluate_loaded(model, tok, model_id, label, args):
         final = after
         mem = f", {torch.cuda.max_memory_reserved() / 2**30:.1f} GB peak reserved" if torch.cuda.is_available() else ""
         print(f"[{label}] step {step + 1}/{args.steps}: {row['mean_unique_commands']:.2f} unique commands, "
-              f"{row['broken_rate']:.0%} broken{mem}", flush=True)
+              f"{row['mean_first3_commands']:.2f} first-3, {row['broken_rate']:.0%} broken{mem}", flush=True)
 
     with open(args.out_dir / f"{label}_histories.jsonl", "w", encoding="utf-8") as f:
         for e, h in enumerate(final):

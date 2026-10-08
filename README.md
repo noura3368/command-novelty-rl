@@ -71,6 +71,17 @@ Run the agents from the repo folder, one per GPU; several agents can share one s
 
 Memory: with prompts of up to ~2,500 tokens, a 3B trial peaks at about 14 GB on one GPU. Each update uses 32 completions, run as 8 micro-batches of 4 (`micro_batch`, `grad_accum`) and generated `generation_batch` at a time (but at least one whole group, `num_generations`). sf's GPU 2 is shared with two ollama servers (about 10 GB), so the 3B sweep generates 8 at a time; at 16, group size 4 trials ran out of memory.
 
+### v3
+
+v2 showed two problems: 7B reached the 150-command maximum, and 3B often made names new by appending words to one phrase ("SET OUTPUT VOLTAGE RAMP UP DURATION WITH SLEW LIMIT ..."). v3 (`sweep_3b_v3.yaml`, `sweep_7b_v3.yaml`) changes:
+
+- Lists keep one entry per command name, in training prompts and in the eval, matching the reward (new parameters on a known command no longer enter the list). v3 eval numbers are therefore not comparable with v2's; each v3 sweep has its own base-model eval.
+- Training prompts are collected by the most diverse v2 trial (3B `35t8q5v4`, 7B `den3heif`), merged with `merge_adapter.py`, over 150 steps: with one entry per name, the base models' own lists would stay a few entries long.
+- The sweep maximizes `final_first3_commands`, the number of distinct first three words of the names, which padding does not raise. Distinct names, real KA3005P commands and name length are logged next to it.
+- Narrower ranges from the v2 results: lr 4e-5 to 2e-4, beta 0 to 0.03, group size 8 or 16.
+
+The reward, prompt, training length and eval size are unchanged.
+
 What each run logs:
 
 | Where | What |
@@ -84,7 +95,7 @@ What each run logs:
 | `completions` table | every completion of every step with its prompt, tier, parsed command, reward and advantage |
 | `samples` table | two whole groups every 10 steps with the end of their history, growing over the run |
 | `eval/*` | per eval step: unique commands, plausible unique commands, reward mean and std, tier rates |
-| summary | `final_unique_commands` (the sweep metric), `final_plausible_unique_commands`, `gain_over_base`, mean eval reward and tier rates, the discovery curve against the base model |
+| summary | `final_unique_commands` (v2 sweep metric), `final_first3_commands` (v3 sweep metric), `final_real_commands` (names in the documented KA3005P set), `final_median_name_length`, `final_plausible_unique_commands`, `gain_over_base`, mean eval reward and tier rates, the discovery curve against the base model |
 
 The eval reward scores each reply as a group of one, so a new command always gets the full +5 there.
 

@@ -37,6 +37,11 @@ _PLAUSIBLE = re.compile(r"^\*?[A-Z]{2,}\d*(\?|:.*)?$")
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
 
+_WORDS = re.compile(r"[A-Z]+")
+# The documented KA3005P protocol; command and value may be split between `command` and `parameters`.
+_KA3005P = re.compile(r"^(VSET1|ISET1)(:[\d.]+|\?)?$|^(VOUT1|IOUT1|STATUS|\*IDN)\??$"
+                      r"|^(OUT|OVP|OCP|BEEP)[01]?$|^(SAV|RCL)[1-5]?$")
+
 
 def parse_completion(text: str) -> Optional[Tuple[str, List[str]]]:
     """Return (command, parameters), or None unless the text is a single JSON object with a non-empty command.
@@ -63,6 +68,20 @@ def parse_completion(text: str) -> Optional[Tuple[str, List[str]]]:
 
 def plausible_syntax(command: str) -> bool:
     return bool(_PLAUSIBLE.match(command))
+
+
+def head_words(command: str, n: int = 3) -> str:
+    """The first n words of a command name (letter runs, upper-cased), e.g. 'SET OUTPUT VOLTAGE'.
+
+    Counting distinct heads instead of distinct names discounts padding: names made new
+    only by appending words ('SET OUTPUT VOLTAGE RAMP ... WITH SLEW LIMIT') share a head.
+    """
+    return " ".join(_WORDS.findall(command.upper())[:n])
+
+
+def ka3005p_command(command: str) -> bool:
+    """True if the name is in the documented KA3005P command set (VSET1, ISET1?, OUT1, *IDN?, ...)."""
+    return bool(_KA3005P.match(command.strip().upper().replace(" ", "")))
 
 
 def score_group(texts: List[str], history: List[dict]) -> List[Tuple[str, float, Optional[tuple]]]:

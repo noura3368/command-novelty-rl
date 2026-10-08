@@ -3,8 +3,9 @@
 Build GRPO training prompts by letting a model explore on its own.
 
 Each episode starts with an empty history. At every step the model generates one
-command for the current history; a parseable command that is not an exact repeat
-is appended. The history *before* each step is written as one row, so the
+command for the current history; a parseable command whose name is not in the
+history yet is appended, so the history lists each command name once (new
+parameters on a known command do not count, matching the reward). The history *before* each step is written as one row, so the
 training set covers histories of every length the model actually reaches.
 
 Run with the base model first, then again with a trained checkpoint (--model
@@ -38,8 +39,8 @@ def run_episodes(model, tok, target, interface, episodes, steps, temperature=1.0
     """Explore from empty histories, one command per episode per step.
 
     Yields (step, before, replies, after) once per step: the histories before the step,
-    the raw replies, and the histories after each parseable reply that is not an exact
-    repeat of its episode's history has been appended.
+    the raw replies, and the histories after each parseable reply with a command name not
+    yet in its episode's history has been appended.
     """
     histories = [[] for _ in range(episodes)]
     for step in range(steps):
@@ -56,7 +57,7 @@ def run_episodes(model, tok, target, interface, episodes, steps, temperature=1.0
 
         for h, reply in zip(histories, replies):
             p = parse_completion(reply)
-            if p is None or any(x["command"] == p[0] and x["parameters"] == p[1] for x in h):
+            if p is None or any(x["command"] == p[0] for x in h):
                 continue
             h.append({"command": p[0], "parameters": p[1]})
         # Prompts grow every step, so cached blocks from earlier steps rarely fit later ones. On a GB10,
