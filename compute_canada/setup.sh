@@ -3,7 +3,7 @@
 #   1. virtualenv at $VENV with requirements.txt
 #   2. model weights downloaded into $HF_HOME
 #   3. W&B login (skipped if ~/.netrc already has a key)
-# Each step is skipped if already done, so it is safe to rerun.
+# Safe to rerun: the venv is reused, satisfied packages and downloaded models are skipped.
 #
 #   git clone git@github.com:noura3368/command-novelty-rl.git && cd command-novelty-rl
 #   ./compute_canada/setup.sh                                  # Qwen2.5-7B and 3B
@@ -22,9 +22,12 @@ if [ ! -f "$VENV/bin/activate" ]; then
     virtualenv --no-download "$VENV"
     source "$VENV/bin/activate"
     pip install --no-index --upgrade pip
-    pip install --no-index torch                 # the Alliance wheelhouse build, linked against the cluster's CUDA
-    pip install -r requirements.txt              # pinned versions not in the wheelhouse come from PyPI
 fi
+# The Alliance's Python rejects PyPI's manylinux wheels, so compiled packages must come from the
+# wheelhouse (--no-index). wandb is unpinned here: 0.30.0 is not in the wheelhouse and building it needs Go.
+# Pure-Python pins (transformers, trl, peft, datasets) still install from PyPI.
+pip install --no-index torch wandb
+grep -v '^wandb' requirements.txt | pip install -r /dev/stdin
 python -c "import torch, transformers, trl, peft, wandb; print('torch', torch.__version__, '| transformers', transformers.__version__, '| trl', trl.__version__)"
 
 for m in "${models[@]}"; do
