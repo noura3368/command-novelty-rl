@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Checks whether a GPU compute node can reach the sites a W&B sweep needs. Run from the repo root:
-#   sbatch --account=def-<pi> compute_canada/test_internet.sh
+#   sbatch --account=def-sfischme compute_canada/test_internet.sh
 #   cat test_internet-<jobid>.out
+# Nibi needs a GPU type; the smallest H100 slice (10 GB) is enough here and starts soonest.
 #SBATCH --job-name=test-internet
-#SBATCH --gpus=1
+#SBATCH --gpus=nvidia_h100_80gb_hbm3_1g.10gb:1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 #SBATCH --time=00:10:00
