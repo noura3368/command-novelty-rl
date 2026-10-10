@@ -3,10 +3,11 @@
 Build GRPO training prompts by letting a model explore on its own.
 
 Each episode starts with an empty history. At every step the model generates one
-command for the current history; a parseable command whose name is not in the
-history yet is appended, so the history lists each command name once (new
-parameters on a known command do not count, matching the reward). The history *before* each step is written as one row, so the
-training set covers histories of every length the model actually reaches.
+command for the current history; a parseable command is appended unless its words
+(reward.command_words) equal those of a command already in the history, so a reply the
+reward scores as a repeat (-6) never enters it, while near-duplicates do. The history
+*before* each step is written as one row, so the training set covers histories of every
+length the model actually reaches.
 
 Run with the base model first, then again with a trained checkpoint (--model
 <output_dir>) so the histories keep up with the policy.
@@ -21,7 +22,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from prompting import build_messages
-from reward import parse_completion
+from reward import command_words, parse_completion
 
 
 def load_model(model_id: str):
@@ -39,8 +40,8 @@ def run_episodes(model, tok, target, interface, episodes, steps, temperature=1.0
     """Explore from empty histories, one command per episode per step.
 
     Yields (step, before, replies, after) once per step: the histories before the step,
-    the raw replies, and the histories after each parseable reply with a command name not
-    yet in its episode's history has been appended.
+    the raw replies, and the histories after each parseable reply that is not a repeat
+    (same command_words as an entry already in its episode's history) has been appended.
     """
     histories = [[] for _ in range(episodes)]
     for step in range(steps):
@@ -57,7 +58,7 @@ def run_episodes(model, tok, target, interface, episodes, steps, temperature=1.0
 
         for h, reply in zip(histories, replies):
             p = parse_completion(reply)
-            if p is None or any(x["command"] == p[0] for x in h):
+            if p is None or any(command_words(x["command"]) == command_words(p[0]) for x in h):
                 continue
             h.append({"command": p[0], "parameters": p[1]})
         # Prompts grow every step, so cached blocks from earlier steps rarely fit later ones. On a GB10,

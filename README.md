@@ -10,14 +10,16 @@ The model answers with one JSON object per response:
 
 The prompt lists everything already sent ("Do NOT create entries with these commands"). Each answer is scored only against that list:
 
-| Answer | Reward |
+| Answer | Reward (v4) |
 |---|---|
-| Not a single JSON object, or empty command | -6 |
-| Same command and parameters as an entry in the list | -1 |
-| Command in the list, new parameters | -1 |
-| Command not in the list | +5, split across the group samples that found the same one |
+| Not a single JSON object, or empty command | -10 |
+| Same command words as an entry in the list (ROUGE-L 1), whatever the parameters | -6 |
+| ROUGE-L 0.7 or more to an entry (near-duplicate) | -3 |
+| ROUGE-L below 0.7 to every entry | +5, split across the group samples within 0.7 of each other |
 
-Only new command names are rewarded. New parameters score like a repeat: parameter novelty is a separate problem (values have an order, 3 < 4 < 5; commands do not), and any reward above -1 would still push the model toward it. Correctness is not rewarded, so gibberish commands count like any other. The values are in `REWARDS` in `reward.py`.
+Only the `command` field is judged. It is turned into words first (`command_words` in `reward.py`): cut at symbols, case changes and digits (`SOUR:VOLT`, `SetOutputVoltage`, `VSET1`), digit runs become `#`, glued words of 8+ letters are split with a fixed dictionary (`GETBATTSTATMAX` -> `GET BATT STAT MAX`), then plural S, repeated words and filler words (`THE`, `OF`, ...) are dropped and the first 6 words kept. Two names are compared by ROUGE-L: 2 x their longest common subsequence of words / their total number of words. So `Set the Output Voltages` repeats `SET OUTPUT VOLTAGE` (1.0), `SET OUTPUT VOLTAGE LEVEL` is a near-duplicate (0.86), and `SET OUTPUT CURRENT` is new (0.67).
+
+Parameter novelty is a separate problem (values have an order, 3 < 4 < 5; commands do not) and is not rewarded. Correctness is not rewarded either, so gibberish commands count like any other. The values are in `REWARDS` and `SIM_THRESHOLD` in `reward.py`. Up to v3 the reward compared exact names: -6 broken, -1 for a known name, +5 for a new one.
 
 ## Pipeline
 
@@ -82,20 +84,31 @@ v2 showed two problems: 7B reached the 150-command maximum, and 3B often made na
 
 The reward, prompt, training length and eval size are unchanged.
 
+### v4
+
+v3 models still made names "new" in ways the first-3-words metric missed: CamelCase (`SetOverloadProtectionAdjustmentFactors` counted as one word), a swapped verb in front of a copied tail, counters (`C1111`, `C1112`). v4 (`sweep_3b_v4.yaml`, `sweep_7b_v4.yaml`) changes:
+
+- The reward compares command words by ROUGE-L (table above): repeats -6, near-duplicates -3, broken JSON -10. `sim_threshold` (0.7) is a sweep value, so it can be tuned later; the eval always uses 0.7.
+- The eval list adds every reply that is not a repeat, and counts distinct commands at ROUGE-L 0.5, 0.6, 0.7, 0.8 and 0.9 (`DistinctCommands`). The sweep maximizes `final_distinct_t70`; the lower thresholds show how many commands are borderline, and the `eval/borderline_pairs` table lists them. `first3` is gone.
+- Training prompts are the pooled v3 prompts of both models, deduplicated (15,204: 5,694 from 3B, 9,510 from 7B), one file for both sizes.
+- The splitting dictionary, `command_words.txt.gz`, was built once from those prompts with `build_dictionary.py` (656 of the models' own words, then wordninja's English list). It is part of the metric: do not rebuild it during a study.
+- Search ranges are v2's: lr 1e-5 to 1e-4, beta 0 to 0.1, temperature 0.8 to 1.3, group size 4, 8 or 16. 10 trials per model, run on Nibi (`compute_canada/agent.sh`).
+
 What each run logs:
 
 | Where | What |
 |---|---|
 | `train/reward`, `train/reward_std` | mean and standard deviation of the reward over each step's completions |
-| `train/tier/*_rate` | share of broken / repeat / new_value / new_structure answers |
+| `train/tier/*_rate` | share of broken / repeat / near_duplicate / new_structure answers (v1-v3: new_value instead of near_duplicate) |
 | `train/novelty/distinct_new_commands` (`_per_group`) | different new commands in the step (averaged per prompt); falling while `new_structure_rate` stays high means the model found one "new" command for every prompt |
 | `train/novelty/nonstandard_new_command_rate` | share of new commands that do not look like `VSET1:` / `*IDN?` style syntax (`plausible_syntax` in `reward.py`), a rough gibberish signal |
 | `train/frac_reward_zero_std` | share of prompts whose samples all scored the same, which give GRPO nothing to learn from |
 | `train/kl`, `train/entropy`, `train/completions/*` | drift from the base model, sampling diversity, answer length |
 | `completions` table | every completion of every step with its prompt, tier, parsed command, reward and advantage |
 | `samples` table | two whole groups every 10 steps with the end of their history, growing over the run |
-| `eval/*` | per eval step: unique commands, plausible unique commands, reward mean and std, tier rates |
-| summary | `final_unique_commands` (v2 sweep metric), `final_first3_commands` (v3 sweep metric), `final_real_commands` (names in the documented KA3005P set), `final_median_name_length`, `final_plausible_unique_commands`, `gain_over_base`, mean eval reward and tier rates, the discovery curve against the base model |
+| `eval/*` | per eval step: distinct commands at each threshold (`eval/distinct_t50` ... `t90`, v4), unique commands, plausible unique commands, reward mean and std, tier rates |
+| `eval/borderline_pairs` table | v4: commands new at 0.7 but not at 0.5, next to the earlier command they nearly match |
+| summary | `final_distinct_t70` (v4 sweep metric) and `final_distinct_t50` ... `t90`, `final_unique_commands` (v2 sweep metric), `final_first3_commands` (v3 sweep metric, v3 runs only), `final_real_commands` (names in the documented KA3005P set), `final_median_name_length`, `final_plausible_unique_commands`, `gain_over_base` (at 0.7 in v4), mean eval reward and tier rates, the discovery curve against the base model |
 
 The eval reward scores each reply as a group of one, so a new command always gets the full +5 there.
 

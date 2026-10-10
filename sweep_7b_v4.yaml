@@ -1,0 +1,72 @@
+# v4 W&B sweep for Qwen2.5-7B (see README, "v4"). Changes from v3:
+#   - reward judges command names by ROUGE-L over their words (reward.command_words):
+#     broken -10, repeat -6, near-duplicate (ROUGE-L >= 0.7) -3, new +5
+#   - training prompts: the pooled, deduplicated v3 prompts of both models (same file for 3B and 7B)
+#   - maximizes final_distinct_t70 (distinct commands at ROUGE-L 0.7); 0.5 ... 0.9 are logged too
+#   - search ranges back to v2's
+#   ./prepare_sweep.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b-v4 16     # base-model eval (histories.jsonl copied in first)
+#   wandb sweep sweep_7b_v4.yaml
+#   wandb agent --count 10 <entity/project/id>        # on Nibi: compute_canada/agent.sh, one trial per job
+program: wandb_trial.py
+project: command-novelty-rl
+name: qwen2.5-7b-v4
+method: bayes
+metric:
+  name: final_distinct_t70
+  goal: maximize
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+parameters:
+  # searched (v2 ranges)
+  lr:
+    distribution: log_uniform_values
+    min: 1.0e-5
+    max: 1.0e-4
+  beta:
+    distribution: uniform
+    min: 0.0
+    max: 0.1
+  temperature:
+    distribution: uniform
+    min: 0.8
+    max: 1.3
+  num_generations:
+    values: [4, 8, 16]                    # GRPO group size; 32 completions per step either way
+  # fixed: the same in every trial
+  sim_threshold:                          # reward's near-duplicate threshold; the eval always uses 0.7
+    value: 0.7
+  model:
+    value: Qwen/Qwen2.5-7B-Instruct
+  target:
+    value: KORAD KA3005P Power Supply
+  interface:
+    value: RS232 interface
+  histories:
+    value: sweeps/7b-v4/histories.jsonl
+  base_eval:
+    value: sweeps/7b-v4/base_eval/eval_steps.csv
+  out_dir:
+    value: sweeps/7b-v4/wandb
+  trial_steps:
+    value: 150
+  sample_every:
+    value: 10
+  micro_batch:                            # completions per forward/backward pass
+    value: 4
+  grad_accum:                             # micro-batches per update: 4 x 8 = 32 completions per step
+    value: 8
+  generation_batch:                       # completions generated at once (raised to num_generations if smaller); fits an 80 GB H100
+    value: 16
+  version:                                # added to each run as a W&B tag
+    value: v4
+  # evaluation, must match prepare_sweep.sh so the base curve is comparable
+  eval_episodes:
+    value: 16
+  eval_length:                            # commands per eval list (evaluate.py --steps)
+    value: 150
+  batch_size:                             # lists generated at once in eval; pass the same to prepare_sweep.sh
+    value: 16
+  seed:
+    value: 0

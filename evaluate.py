@@ -3,21 +3,24 @@
 Compare how many different commands models find over a long run.
 
 Each model explores exactly as in collect_histories.py (same prompt, same settings,
-same seed): --episodes independent lists, one command per list per step, each new
-command appended to its list. Per step it records, averaged over the lists:
+same seed): --episodes independent lists, one command per list per step, each reply that
+is not a repeat appended to its list. Per step it records, averaged over the lists:
 
-    unique commands     distinct `command` values in the list
-    first-3 commands    distinct first three words of the names (reward.head_words); discounts padding
+    distinct commands   commands that count as different at each of reward.EVAL_THRESHOLDS
+                        (0.5 ... 0.9): kept in list order if their ROUGE-L to every command kept
+                        before is below the threshold (reward.DistinctCommands). 0.7, the reward's
+                        threshold, is the main number; lower ones show how many are borderline
+    unique commands     distinct `command` strings in the list (raw, no word matching)
     plausible unique    the same, counting only commands that pass reward.plausible_syntax
     real commands       distinct names in the documented KA3005P set (reward.ka3005p_command)
     name length         median length of the names in the lists, in characters
-    entries             list length (one entry per command name)
-    tier rates          share of replies that were broken / repeat / new_value / new_structure,
+    entries             list length
+    tier rates          share of replies that were broken / repeat / near_duplicate / new_structure,
                         judged against the list before the reply (same rules as reward.py)
     reward              mean and sd of the reward each reply would get as a group of one
 
 Writes <out-dir>/eval_steps.csv, <out-dir>/<label>_histories.jsonl (final lists),
-and <out-dir>/discovery_curve.png.
+and <out-dir>/discovery_curve.png (distinct commands at 0.7).
 
     python evaluate.py --models Qwen/Qwen2.5-7B-Instruct runs/round0/merged \\
         --labels base round0 --steps 100 --out-dir eval/round0
@@ -33,11 +36,20 @@ from pathlib import Path
 import torch
 
 from collect_histories import load_model, run_episodes
-from reward import TIERS, head_words, ka3005p_command, plausible_syntax, score_group
+from reward import (EVAL_THRESHOLDS, SIM_THRESHOLD, TIERS, DistinctCommands, command_words, ka3005p_command,
+                    plausible_syntax, rouge_l, score_group)
 
 # Categorical slots in fixed order (light surface); a model keeps its slot by position.
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
 SURFACE, TEXT, MUTED, GRID = "#fcfcfb", "#1a1a19", "#6b6a63", "#e6e5e0"
+
+
+def threshold_key(t: float) -> str:
+    """Column suffix for a threshold: 0.7 -> 't70' (W&B treats dots in metric names as nesting)."""
+    return f"t{round(t * 100):02d}"
+
+
+MAIN = f"mean_distinct_{threshold_key(SIM_THRESHOLD)}"   # the eval's headline column
 
 
 def default_label(model_id: str) -> str:
@@ -59,38 +71,65 @@ def evaluate_loaded(model, tok, model_id, label, args):
     """Run the loop with an already loaded model; write <label>_histories.jsonl and return the per-step rows."""
     torch.manual_seed(args.seed)
     rows, final = [], None
+    # One greedy counter per list and threshold, fed each list's new entries as it grows.
+    counters = [{t: DistinctCommands(t) for t in EVAL_THRESHOLDS} for _ in range(args.episodes)]
+    fed = [0] * args.episodes
     for step, before, replies, after in run_episodes(model, tok, args.target, args.interface, args.episodes,
                                                      args.steps, args.temperature, args.max_new_tokens,
                                                      args.batch_size):
         scored = [score_group([r], b)[0] for r, b in zip(replies, before)]
         tiers = [t for t, _, _ in scored]
         rewards = [r for _, r, _ in scored]
+        for e, h in enumerate(after):
+            for x in h[fed[e]:]:
+                for c in counters[e].values():
+                    c.add(x["command"])
+            fed[e] = len(h)
         unique = [len({x["command"] for x in h}) for h in after]
-        row = {
-            "label": label, "model": model_id, "step": step + 1,
+        row = {"label": label, "model": model_id, "step": step + 1}
+        for t in EVAL_THRESHOLDS:
+            counts = [len(c[t]) for c in counters]
+            row[f"mean_distinct_{threshold_key(t)}"] = statistics.mean(counts)
+            row[f"std_distinct_{threshold_key(t)}"] = statistics.pstdev(counts)
+        row.update({
             "mean_unique_commands": statistics.mean(unique),
             "std_unique_commands": statistics.pstdev(unique),
             "mean_plausible_unique_commands": statistics.mean(
                 len({x["command"] for x in h if plausible_syntax(x["command"])}) for h in after),
-            "mean_first3_commands": statistics.mean(len({head_words(x["command"]) for x in h}) for h in after),
             "mean_real_commands": statistics.mean(
                 len({x["command"] for x in h if ka3005p_command(x["command"])}) for h in after),
             "median_name_length": statistics.median([len(x["command"]) for h in after for x in h] or [0]),
             "mean_entries": statistics.mean(len(h) for h in after),
             "mean_reward": statistics.mean(rewards),
             "std_reward": statistics.pstdev(rewards),
-        }
+        })
         for t in TIERS:
             row[f"{t}_rate"] = tiers.count(t) / len(tiers)
         rows.append(row)
         final = after
         mem = f", {torch.cuda.max_memory_reserved() / 2**30:.1f} GB peak reserved" if torch.cuda.is_available() else ""
-        print(f"[{label}] step {step + 1}/{args.steps}: {row['mean_unique_commands']:.2f} unique commands, "
-              f"{row['mean_first3_commands']:.2f} first-3, {row['broken_rate']:.0%} broken{mem}", flush=True)
+        print(f"[{label}] step {step + 1}/{args.steps}: {row[MAIN]:.2f} distinct commands at {SIM_THRESHOLD}, "
+              f"{row['mean_unique_commands']:.2f} unique names, {row['broken_rate']:.0%} broken{mem}", flush=True)
 
     with open(args.out_dir / f"{label}_histories.jsonl", "w", encoding="utf-8") as f:
         for e, h in enumerate(final):
             f.write(json.dumps({"episode": e, "history": h}) + "\n")
+    return rows
+
+
+def borderline_pairs(histories, low=min(EVAL_THRESHOLDS), high=SIM_THRESHOLD, limit=300):
+    """Commands that count as new at `high` but not at `low`: ROUGE-L to their closest earlier
+    entry in the same list is in [low, high). Returns rows (list, position, command, closest
+    earlier command, ROUGE-L), at most `limit`."""
+    rows = []
+    for e, h in enumerate(histories):
+        words = [command_words(x["command"]) for x in h]
+        for i in range(1, len(h)):
+            sim, j = max((rouge_l(words[i], words[j]), j) for j in range(i))
+            if low <= sim < high:
+                rows.append([e, i, h[i]["command"], h[j]["command"], round(sim, 3)])
+                if len(rows) >= limit:
+                    return rows
     return rows
 
 
@@ -105,8 +144,8 @@ def plot(rows, labels, path):
     for i, label in enumerate(labels):
         r = [x for x in rows if x["label"] == label]
         steps = [x["step"] for x in r]
-        mean = [x["mean_unique_commands"] for x in r]
-        std = [x["std_unique_commands"] for x in r]
+        mean = [x[MAIN] for x in r]
+        std = [x[MAIN.replace("mean_", "std_", 1)] for x in r]
         color = COLORS[i % len(COLORS)]
         ax.fill_between(steps, [m - s for m, s in zip(mean, std)], [m + s for m, s in zip(mean, std)],
                         color=color, alpha=0.12, linewidth=0)
@@ -115,9 +154,10 @@ def plot(rows, labels, path):
             ax.annotate(f"{label}  {mean[-1]:.1f}", (steps[-1], mean[-1]), xytext=(6, 0),
                         textcoords="offset points", va="center", fontsize=9, color=TEXT)
 
-    ax.set_title("Unique commands found per list (mean ± 1 sd across lists)", loc="left", fontsize=11, color=TEXT)
+    ax.set_title(f"Distinct commands per list at ROUGE-L {SIM_THRESHOLD} (mean ± 1 sd across lists)", loc="left",
+                 fontsize=11, color=TEXT)
     ax.set_xlabel("Step", color=MUTED)
-    ax.set_ylabel("Unique commands", color=MUTED)
+    ax.set_ylabel("Distinct commands", color=MUTED)
     ax.set_ylim(bottom=0)
     ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
     ax.grid(axis="y", color=GRID, linewidth=0.8)
@@ -167,7 +207,9 @@ def main() -> int:
     for label in labels:
         r = [x for x in rows if x["label"] == label]
         broken = statistics.mean(x["broken_rate"] for x in r)
-        print(f"  {label}: {r[-1]['mean_unique_commands']:.2f} unique commands per list, {broken:.0%} broken overall")
+        counts = ", ".join(f"{r[-1][f'mean_distinct_{threshold_key(t)}']:.2f} at {t}" for t in EVAL_THRESHOLDS)
+        print(f"  {label}: distinct commands per list {counts}; {r[-1]['mean_unique_commands']:.2f} unique names, "
+              f"{broken:.0%} broken overall")
     print(f"Results in {args.out_dir}")
     return 0
 

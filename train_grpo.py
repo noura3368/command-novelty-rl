@@ -32,7 +32,7 @@ from datasets import Dataset
 from trl import GRPOConfig, GRPOTrainer
 
 from prompting import build_messages
-from reward import make_reward_fn
+from reward import SIM_THRESHOLD, make_reward_fn
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--lr", type=float, default=None, help="default 1e-6, or 1e-5 with --lora")
     ap.add_argument("--beta", type=float, default=0.04, help="KL penalty to the base model")
+    ap.add_argument("--sim-threshold", type=float, default=SIM_THRESHOLD,
+                    help="ROUGE-L at or above which a command is a near-duplicate of a history command (reward.py)")
     ap.add_argument("--batch-size", type=int, default=8, help="completions per device per step")
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--generation-batch-size", type=int, default=None,
@@ -114,7 +116,8 @@ def train(args) -> GRPOTrainer:
                                  task_type="CAUSAL_LM")
     trainer = GRPOTrainer(
         model=args.model,
-        reward_funcs=make_reward_fn(out / "samples.jsonl", sample_every=args.sample_every),
+        reward_funcs=make_reward_fn(out / "samples.jsonl", sample_every=args.sample_every,
+                                    threshold=args.sim_threshold),
         args=config,
         train_dataset=dataset,
         peft_config=peft_config,

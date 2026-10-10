@@ -8,9 +8,11 @@ through TRL: reward / reward_std, kl, entropy, and the tier and novelty metrics 
 reward.py, plus the `completions` table every step and the `samples` table every
 `sample_every` steps. The trained model is evaluated in memory with the same loop and
 settings as evaluate.py; per-step eval curves go under eval/, and the final values
-(`final_unique_commands`, `final_first3_commands`, ...; the sweep YAML names the one it
-maximizes) are logged at the end with the other summaries and the discovery curve next
-to the base model's. A `version` value in the sweep config (e.g. v3) is added as a run tag.
+(`final_distinct_t70`, the distinct-command count at ROUGE-L 0.7, which the v4 sweep
+maximizes; `final_distinct_t50` ... `t90`; `final_unique_commands`; ...) are logged at the end with the other summaries and the discovery curve next
+to the base model's. A `version` value in the sweep config (e.g. v4) is added as a run tag.
+`sim_threshold` (default reward.SIM_THRESHOLD) is the reward's near-duplicate threshold;
+the eval always uses reward.SIM_THRESHOLD, so trials stay comparable.
 
 Files per trial: <out_dir>/<run id>/ holds the adapter, samples.jsonl and eval/.
 
@@ -31,8 +33,8 @@ from types import SimpleNamespace
 
 import wandb
 
-from evaluate import evaluate_loaded, plot
-from reward import TIERS
+from evaluate import MAIN, borderline_pairs, evaluate_loaded, plot, threshold_key
+from reward import EVAL_THRESHOLDS, SIM_THRESHOLD, TIERS
 from train_grpo import build_parser, train
 
 
@@ -41,7 +43,7 @@ def main() -> int:
     # Copy the sweep's values now: TRL's W&B callback later writes its own settings into run.config,
     # and some names overlap (TrainingArguments has eval_steps, seed, ...).
     defaults = {"num_generations": 8, "sample_every": 10, "base_eval": None,
-                "micro_batch": 4, "grad_accum": 8, "generation_batch": 16}
+                "micro_batch": 4, "grad_accum": 8, "generation_batch": 16, "sim_threshold": SIM_THRESHOLD}
     c = SimpleNamespace(**{**defaults, **dict(run.config)})
     out = Path(c.out_dir) / run.id
     if getattr(c, "version", None):
@@ -52,6 +54,7 @@ def main() -> int:
         "--target", c.target, "--interface", c.interface,
         "--lora", "--max-steps", str(c.trial_steps), "--save-steps", str(10 ** 9), "--seed", str(c.seed),
         "--lr", str(c.lr), "--beta", str(c.beta), "--temperature", str(c.temperature),
+        "--sim-threshold", str(c.sim_threshold),
         "--num-generations", str(c.num_generations),
         "--batch-size", str(c.micro_batch), "--grad-accum", str(c.grad_accum),
         "--generation-batch-size", str(max(c.generation_batch, c.num_generations)),
@@ -112,8 +115,9 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
     wandb.define_metric("eval/*", step_metric="eval/step")
     for r in rows:
         wandb.log({"eval/step": r["step"], "eval/unique_commands": r["mean_unique_commands"],
+                   **{f"eval/distinct_{threshold_key(t)}": r[f"mean_distinct_{threshold_key(t)}"]
+                      for t in EVAL_THRESHOLDS},
                    "eval/plausible_unique_commands": r["mean_plausible_unique_commands"],
-                   "eval/first3_commands": r["mean_first3_commands"],
                    "eval/real_commands": r["mean_real_commands"],
                    "eval/median_name_length": r["median_name_length"],
                    "eval/reward_mean": r["mean_reward"], "eval/reward_std": r["std_reward"],
@@ -126,27 +130,32 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
             base = [{k: (v if k in ("label", "model") else float(v)) for k, v in r.items()} for r in csv.DictReader(f)]
         labels, plot_rows = ["base", "trained"], base + plot_rows
         summary["base_final_unique_commands"] = base[-1]["mean_unique_commands"]
-        summary["gain_over_base"] = rows[-1]["mean_unique_commands"] - base[-1]["mean_unique_commands"]
-        if "mean_first3_commands" in base[-1]:
-            summary["base_final_first3_commands"] = base[-1]["mean_first3_commands"]
+        for t in EVAL_THRESHOLDS:
+            key = threshold_key(t)
+            summary[f"base_final_distinct_{key}"] = base[-1][f"mean_distinct_{key}"]
+        summary["gain_over_base"] = rows[-1][MAIN] - base[-1][MAIN]
     plot(plot_rows, labels, eval_dir / "discovery_curve.png")
 
     with open(eval_dir / "trained_histories.jsonl", encoding="utf-8") as f:
-        first = json.loads(f.readline())["history"]
+        histories = [json.loads(line)["history"] for line in f]
     examples = wandb.Table(columns=["command", "parameters"],
-                           data=[[h["command"], json.dumps(h["parameters"])] for h in first])
+                           data=[[h["command"], json.dumps(h["parameters"])] for h in histories[0]])
+    borderline = wandb.Table(columns=["list", "position", "command", "closest_earlier_command", "rouge_l"],
+                             data=borderline_pairs(histories))
 
     wandb.log({
         **summary,
+        **{f"final_distinct_{threshold_key(t)}": rows[-1][f"mean_distinct_{threshold_key(t)}"]
+           for t in EVAL_THRESHOLDS},
         "final_unique_commands": rows[-1]["mean_unique_commands"],
         "final_plausible_unique_commands": rows[-1]["mean_plausible_unique_commands"],
-        "final_first3_commands": rows[-1]["mean_first3_commands"],
         "final_real_commands": rows[-1]["mean_real_commands"],
         "final_median_name_length": rows[-1]["median_name_length"],
         "eval_reward_mean": statistics.mean(r["mean_reward"] for r in rows),
         **{f"{t}_rate": statistics.mean(r[f"{t}_rate"] for r in rows) for t in TIERS},
         "eval/discovery_curve": wandb.Image(str(eval_dir / "discovery_curve.png")),
         "eval/example_list": examples,
+        "eval/borderline_pairs": borderline,
     })
     if rescored:
         run.tags = sorted(set(run.tags) | {"rescored"})

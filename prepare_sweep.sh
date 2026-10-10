@@ -5,10 +5,11 @@
 #   <out_dir>/base_eval/eval_steps.csv   the base model's reference curve (evaluate.py, same settings as the trials)
 # Each step is skipped if its output already exists, so it is safe to rerun.
 # batch_size (default 16) is how many lists are generated at once; use the sweep YAML's batch_size.
-# v3 collects with a trained v2 model, merged first with merge_adapter.py.
+# v3 collected with a trained v2 model, merged first with merge_adapter.py. v4 reuses the pooled v3
+# prompts: copy them to <out_dir>/histories.jsonl first, so only the base eval runs.
 #
 #   CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 ./prepare_sweep.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b-v3 16 sweeps/3b-v3/collector
-#   ./prepare_sweep.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b-v3 8 sweeps/7b-v3/collector
+#   ./prepare_sweep.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b-v4 16                # on Nibi: compute_canada/base_eval.sh
 set -euo pipefail
 
 if [ $# -lt 2 ] || [ $# -gt 4 ]; then
