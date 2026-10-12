@@ -3,6 +3,7 @@
 # copying the training prompts to <out_dir>/histories.jsonl (otherwise prepare_sweep.sh would collect new ones):
 #   sbatch --account=def-sfischme compute_canada/base_eval.sh Qwen/Qwen2.5-3B-Instruct sweeps/3b-v4
 #   sbatch --account=def-sfischme compute_canada/base_eval.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b-v4
+#   sbatch --account=def-sfischme compute_canada/base_eval.sh Qwen/Qwen2.5-0.5B-Instruct sweeps/0.5b-v4
 # Writes <out_dir>/base_eval/eval_steps.csv, which the sweep YAML's base_eval points to.
 #SBATCH --job-name=base-eval
 #SBATCH --gpus=h100:1

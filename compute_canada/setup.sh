@@ -6,7 +6,7 @@
 # Safe to rerun: the venv is reused, satisfied packages and downloaded models are skipped.
 #
 #   git clone git@github.com:noura3368/command-novelty-rl.git && cd command-novelty-rl
-#   ./compute_canada/setup.sh                                  # Qwen2.5-7B and 3B
+#   ./compute_canada/setup.sh                                  # Qwen2.5-7B, 3B and 0.5B
 #   ./compute_canada/setup.sh Qwen/Qwen2.5-1.5B-Instruct       # or name the models
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,7 +14,7 @@ source compute_canada/env.sh
 
 models=("$@")
 if [ ${#models[@]} -eq 0 ]; then
-    models=(Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-3B-Instruct)
+    models=(Qwen/Qwen2.5-7B-Instruct Qwen/Qwen2.5-3B-Instruct Qwen/Qwen2.5-0.5B-Instruct)
 fi
 
 if [ ! -f "$VENV/bin/activate" ]; then
