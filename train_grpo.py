@@ -69,6 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--resume", action="store_true",
                     help="continue from the latest checkpoint in --output-dir (use the same settings as before)")
     ap.add_argument("--use-vllm", action="store_true", help="generate with vLLM (much faster, needs vllm installed)")
+    ap.add_argument("--attn-implementation", default="eager", choices=["eager", "sdpa"],
+                    help="attention of the trained model; sdpa gave NaN gradients at step 1 on Nibi's H100s "
+                         "(torch 2.14.1), eager did not")
     ap.add_argument("--report-to", default="none", help="e.g. wandb")
     ap.add_argument("--log-completions", action="store_true",
                     help="log every step's completions to the --report-to backend (and print a few)")
@@ -136,7 +139,8 @@ def train(args) -> GRPOTrainer:
         save_steps=args.save_steps,
         bf16=torch.cuda.is_available(),
         # TRL would load the base model in fp32 (12 GB for 3B); bf16 matches collect_histories.load_model.
-        model_init_kwargs={"dtype": "bfloat16" if torch.cuda.is_available() else "float32"},
+        model_init_kwargs={"dtype": "bfloat16" if torch.cuda.is_available() else "float32",
+                           "attn_implementation": args.attn_implementation},
         use_vllm=args.use_vllm,
         report_to=args.report_to,
         log_completions=args.log_completions,
