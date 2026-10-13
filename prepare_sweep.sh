@@ -31,11 +31,11 @@ if [ ! -f "$out/histories.jsonl" ]; then
     mv "$out/histories.partial.jsonl" "$out/histories.jsonl"
 fi
 
-# Keep --steps / batch_size / seed in step with eval_length / batch_size / seed in sweep_*.yaml. The base
-# eval has 30 lists, the trials eval_episodes (16); gain_over_base compares their means.
+# Keep these in step with eval_episodes / eval_length / batch_size / seed in sweep_*.yaml (v5: 30 lists,
+# list rule exact). v5 sweeps point base_eval at sweeps/baseline/<size>/seed0 instead (README, "v5").
 if [ ! -f "$out/base_eval/eval_steps.csv" ]; then
     echo "Evaluating the base model"
     python -u evaluate.py --models "$model" --labels base --episodes 30 --steps 150 --batch-size "$batch" --seed 0 \
-        --list-rule command_words --out-dir "$out/base_eval"
+        --list-rule exact --out-dir "$out/base_eval"
 fi
 echo "Ready: $out/histories.jsonl and $out/base_eval/eval_steps.csv"

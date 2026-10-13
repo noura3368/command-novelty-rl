@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
 """
-Novelty reward for GRPO with one command per response.
+Novelty reward for GRPO with one command per response (v5, simple reward).
 
 The model answers with one JSON object: {"command": str, "parameters": [str, ...]}.
-Only the `command` field is judged; parameters are ignored. The command is turned into
-a word sequence (command_words) and compared with every command in the history shown
-in its own prompt:
+Only the `command` field is judged; parameters are ignored. The command name is compared,
+exactly as written, with every command name in the history shown in its own prompt:
 
     not one JSON object / empty command            broken          -10
-    2+ connector words (WITH, AND, TO, OF, ...)    wordy            -6   (reads like a sentence; see wordy)
-    same words as a history command                repeat           -6   (also with new parameters)
-    anything else                                  new_structure    +5 / k
+    the exact name of a history command            repeat           -6   (also with new parameters)
+    any other name                                 new_structure    +5 / k
 
-k is the number of new completions in the same group (same prompt) with the same words as
-this one (itself included), so a group that all finds the same thing shares one bonus.
-command_words makes CamelCase or glued spellings of a known name and counters (C1111, C1112)
-repeats; wordy catches the padding v1-v3 models used to make names "new"
-(SET OUTPUT VOLTAGE -> ... RAMP RATE WITH SLEW LIMIT AND ...).
-Novelty of parameters is a separate problem, deliberately left out.
+k is the number of completions in the same group (same prompt) with exactly this new name,
+itself included, so a group that all finds the same name shares one bonus (as in v3).
+The reward detects no hacks on purpose: SET_VOLTAGE after SetVoltage, TEST2 after TEST1 or a
+padded sentence all count as new, so the v5 sweep can measure which settings lead models to them.
+command_words and wordy (v4's reward) are kept to measure that afterwards, through
+clean_histories.py; they never change a reward.
 Gibberish commands count like any other: only novelty is rewarded.
 `plausible_syntax` is a rough check for that, used only in logging, never in the reward.
 """
@@ -31,10 +29,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-REWARDS = {"broken": -10.0, "wordy": -6.0, "repeat": -6.0, "new_structure": 5.0}
+REWARDS = {"broken": -10.0, "repeat": -6.0, "new_structure": 5.0}
 TIERS = list(REWARDS)
 
-# command_words: names are cut into words, then compared word by word.
+# command_words (v4's comparison; since v5 only used to measure hacking): names are cut into words.
 _SEPARATORS = re.compile(r"[^A-Za-z0-9]+")
 # CamelCase and acronym boundaries (SetVoltage, HTTPServer) and letter/digit boundaries (VSET1).
 _PIECES = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
@@ -177,31 +175,15 @@ def wordy(name: str) -> bool:
 
 
 def score_group(texts: List[str], history: List[dict]) -> List[Tuple[str, float, Optional[tuple]]]:
-    """Score the completions of one prompt. Returns (tier, reward, parsed) per completion, in order."""
-    seen = {command_words(h["command"]) for h in history}
+    """Score the completions of one prompt. Returns (tier, reward, parsed) per completion, in order.
+
+    A new name's +5 is divided by the number of completions with exactly that new name (itself included)."""
+    seen = {h["command"] for h in history}
     parsed = [parse_completion(t) for t in texts]
-    words = [command_words(p[0]) if p else None for p in parsed]
-
-    tiers = []
-    for p, w in zip(parsed, words):
-        if p is None:
-            tiers.append("broken")
-        elif wordy(p[0]):
-            tiers.append("wordy")
-        elif w in seen:
-            tiers.append("repeat")
-        else:
-            tiers.append("new_structure")
-
-    new = [w for w, t in zip(words, tiers) if t == "new_structure"]
-    out = []
-    for p, w, t in zip(parsed, words, tiers):
-        if t == "new_structure":
-            k = new.count(w)   # includes itself
-            out.append((t, REWARDS[t] / k, p))
-        else:
-            out.append((t, REWARDS[t], p))
-    return out
+    tiers = ["broken" if p is None else "repeat" if p[0] in seen else "new_structure" for p in parsed]
+    new = [p[0] for p, t in zip(parsed, tiers) if t == "new_structure"]
+    return [(t, REWARDS[t] / new.count(p[0]) if t == "new_structure" else REWARDS[t], p)
+            for p, t in zip(parsed, tiers)]
 
 
 def make_reward_fn(log_path: Optional[Path] = None, sample_every: int = 0, sample_groups: int = 2,
@@ -216,7 +198,7 @@ def make_reward_fn(log_path: Optional[Path] = None, sample_every: int = 0, sampl
     command are added to TRL's completions table, and these are logged next to `reward`:
 
         tier/<tier>_rate                         share of completions in each tier
-        novelty/distinct_new_commands            different new commands (distinct command_words) in the whole batch
+        novelty/distinct_new_commands            different new command names in the whole batch
         novelty/distinct_new_commands_per_group  the same, averaged over prompts
         novelty/nonstandard_new_command_rate     share of new commands failing plausible_syntax
 
@@ -261,9 +243,9 @@ def make_reward_fn(log_path: Optional[Path] = None, sample_every: int = 0, sampl
             for t in TIERS:
                 log_metric(f"tier/{t}_rate", tiers.count(t) / len(tiers))
             new = [(i, parsed[i][0]) for i in range(len(texts)) if tiers[i] == "new_structure"]
-            log_metric("novelty/distinct_new_commands", len({command_words(c) for _, c in new}))
+            log_metric("novelty/distinct_new_commands", len({c for _, c in new}))
             log_metric("novelty/distinct_new_commands_per_group",
-                       sum(len({command_words(parsed[i][0]) for i in idx if tiers[i] == "new_structure"})
+                       sum(len({parsed[i][0] for i in idx if tiers[i] == "new_structure"})
                            for idx in groups.values())
                        / len(groups))
             if new:

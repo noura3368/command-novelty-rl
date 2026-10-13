@@ -3,9 +3,9 @@
 Build GRPO training prompts by letting a model explore on its own.
 
 Each episode starts with an empty history. At every step the model generates one
-command for the current history; a parseable command is appended unless it is wordy
-(reward.wordy) or its words (reward.command_words) equal those of a command already in the
-history, so a reply the reward scores as wordy or a repeat (-6) never enters it. The history
+command for the current history; a parseable command is appended unless a command with
+exactly the same name is already in the history (is_new, list rule `exact`, the same test as
+the v5 reward), so a reply the reward scores as a repeat (-6) never enters it. The history
 *before* each step is written as one row, so the training set covers histories of every
 length the model actually reaches.
 
@@ -35,14 +35,14 @@ def load_model(model_id: str):
     return model, tok
 
 
-LIST_RULES = ("command_words", "exact")
+LIST_RULES = ("exact", "command_words")
 
 
-def is_new(name: str, history: list, list_rule: str = "command_words") -> bool:
+def is_new(name: str, history: list, list_rule: str = "exact") -> bool:
     """Whether a parsed reply's command name is appended to its history (parameters are never compared).
 
+    exact (v5): no entry with exactly the same command name; nothing else is checked.
     command_words (v4): not wordy and no entry with the same command_words.
-    exact: no entry with exactly the same command name; nothing else is checked.
     """
     if list_rule == "exact":
         return all(x["command"] != name for x in history)
@@ -50,7 +50,7 @@ def is_new(name: str, history: list, list_rule: str = "command_words") -> bool:
 
 
 def run_episodes(model, tok, target, interface, episodes, steps, temperature=1.0, max_new_tokens=64,
-                 batch_size=16, list_rule="command_words"):
+                 batch_size=16, list_rule="exact"):
     """Explore from empty histories, one command per episode per step.
 
     Yields (step, before, replies, after) once per step: the histories before the step,

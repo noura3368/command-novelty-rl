@@ -10,14 +10,15 @@ The model answers with one JSON object per response:
 
 The prompt lists everything already sent ("Do NOT create entries with these commands"). Each answer is scored only against that list:
 
-| Answer | Reward (v4) |
+| Answer | Reward (v5) |
 |---|---|
 | Not a single JSON object, or empty command | -10 |
-| 2 or more connector words (`WITH`, `AND`, `TO`, `OF`, `THE`, ...): reads like a sentence, not a command | -6 |
-| Same command words as an entry in the list, whatever the parameters | -6 |
-| Anything else (new) | +5, split across the group samples with the same command words |
+| Exactly the name of an entry in the list, whatever the parameters | -6 |
+| Any other name (new) | +5, split across the group samples with the same name (as in v3) |
 
-Only the `command` field is judged. It is turned into words first (`command_words` in `reward.py`): cut at symbols, case changes and digits (`SOUR:VOLT`, `SetOutputVoltage`, `VSET1`), digit runs become `#`, glued words of 8+ letters are split with a fixed dictionary (`GETBATTSTATMAX` -> `GET BATT STAT MAX`), then plural S, repeated words and filler words (`THE`, `OF`, ...) are dropped and the first 6 words kept. Two names with the same words are the same command. So `Set the Output Voltages` and `set_output_voltage` repeat `SET OUTPUT VOLTAGE`, `VSET2` repeats `VSET1` (`VSET #`), and `SET OUTPUT VOLTAGE LEVEL` and `SET OUTPUT CURRENT` are new.
+Only the `command` field is judged, and since v5 exactly as written: `SET_VOLTAGE` after `SetVoltage`, `TEST2` after `TEST1` or a padded sentence all earn +5. The v5 reward detects no hacks on purpose; the v5 sweep measures which settings lead to them (see "v5").
+
+v4's reward (`sweep_*_v4.yaml`) compared command words instead and had a fourth tier: -10 broken, -6 wordy (2 or more connector words such as `WITH`, `AND`, `TO`: reads like a sentence, not a command), -6 same command words as an entry, +5 split across the group samples with the same command words. Since v5 these functions only measure hacking (`clean_histories.py`). In v4 the name was turned into words first (`command_words` in `reward.py`): cut at symbols, case changes and digits (`SOUR:VOLT`, `SetOutputVoltage`, `VSET1`), digit runs become `#`, glued words of 8+ letters are split with a fixed dictionary (`GETBATTSTATMAX` -> `GET BATT STAT MAX`), then plural S, repeated words and filler words (`THE`, `OF`, ...) are dropped and the first 6 words kept. Two names with the same words are the same command. So `Set the Output Voltages` and `set_output_voltage` repeat `SET OUTPUT VOLTAGE`, `VSET2` repeats `VSET1` (`VSET #`), and `SET OUTPUT VOLTAGE LEVEL` and `SET OUTPUT CURRENT` are new.
 
 Before that, a name with 2 or more connector words (`CONNECTORS` and `wordy` in `reward.py`, counted on the same words before filler is dropped) is `wordy`: `SET BOOST MODE TO BOOSTBOOST WITH OVERRIDE AND CUSTOM LEVEL`, `GETBATTERYCHARGESTATUSWITHTIMEANDTEMPERATURE`. In v2 these made up up to 68% of a 3B trial's names and 91% of a 7B trial's (`hack_report.py`). Real commands (`VSET1:5`, `SOUR:VOLT:LEVE 5`) have none, and one is allowed (`SET OUTPUT VOLTAGE TO 5`). `A` and `ON` are not connectors, since they are also units and values (`CURR 1 A`, `OUTP ON`).
 
@@ -96,20 +97,38 @@ v3 models still made names "new" in ways the first-3-words metric missed: CamelC
 - The splitting dictionary, `command_words.txt.gz`, was built once from those prompts with `build_dictionary.py` (656 of the models' own words, then wordninja's English list). It is part of the metric: do not rebuild it during a study.
 - Search ranges are v2's: lr 1e-5 to 1e-4, beta 0 to 0.1, temperature 0.8 to 1.3, group size 4, 8 or 16. 10 trials per model, run on Nibi (`compute_canada/agent.sh`).
 
+### v5 (branch `v5-simple-reward`)
+
+v4 kept adding rules against each new hack. v5 asks a different question: with a simple reward that detects no hacks, which settings lead models to hack? `sweep_0.5b_v5.yaml`, `sweep_3b_v5.yaml`, `sweep_7b_v5.yaml` change:
+
+- The reward compares exact names (table above): broken JSON -10, a name already in the list -6, a new name +5 split across the group samples with exactly that name (as in v3).
+- Eval lists add every reply whose exact name is new (`evaluate.py --list-rule exact`, the default), 30 lists per trial. Each trial logs three numbers: `final_new_commands`, the list length the reward pays for (the sweep metric); `final_clean_commands`, the same lists recounted without hacks by `clean_histories.py`'s rules (no wordy names, no repeats once case, separators and numbers are ignored); and `final_hack_share`, the share of the lists those rules remove.
+- Training prompts are v4's pooled prompts after `clean_histories.py` removed wordy names and those repeats from every list, then the duplicate prompts this left (14,732 of 15,204): `sweeps/pooled/histories_clean.jsonl`.
+- Random search instead of Bayesian, 30 trials per model, so trials spread evenly over v2's ranges instead of gathering where the metric is high (which is where hacking pays).
+- The baseline is the untrained models with the same eval, seeds 0, 1 and 2 (`sweeps/baseline/<size>/seed<N>/`); `base_eval` is the seed-0 run, the trials' own seed.
+
+```bash
+python clean_histories.py histories.jsonl --out sweeps/pooled/histories_clean.jsonl --removed sweeps/pooled/removed.csv
+python evaluate.py --models Qwen/Qwen2.5-3B-Instruct --labels base --episodes 30 --steps 150 --seed 0 \
+    --out-dir sweeps/baseline/3b/seed0                  # once per size and seed
+wandb sweep sweep_3b_v5.yaml                            # then compute_canada/agent.sh, one trial per job
+```
+
 What each run logs:
 
 | Where | What |
 |---|---|
 | `train/reward`, `train/reward_std` | mean and standard deviation of the reward over each step's completions |
-| `train/tier/*_rate` | share of broken / wordy / repeat / new_structure answers (v1-v3: new_value instead of wordy) |
+| `train/tier/*_rate` | share of broken / repeat / new_structure answers (v4 also wordy; v1-v3 new_value) |
+| `train/rewardspy/*` | rewardspy's detector states (0 OK, 1 warning, 2 alert) on the reward numbers; its log is `rewardspy.jsonl` in the trial folder |
 | `train/novelty/distinct_new_commands` (`_per_group`) | different new commands in the step (averaged per prompt); falling while `new_structure_rate` stays high means the model found one "new" command for every prompt |
 | `train/novelty/nonstandard_new_command_rate` | share of new commands that do not look like `VSET1:` / `*IDN?` style syntax (`plausible_syntax` in `reward.py`), a rough gibberish signal |
 | `train/frac_reward_zero_std` | share of prompts whose samples all scored the same, which give GRPO nothing to learn from |
 | `train/kl`, `train/entropy`, `train/completions/*` | drift from the base model, sampling diversity, answer length |
 | `completions` table | every completion of every step with its prompt, tier, parsed command, reward and advantage |
 | `samples` table | two whole groups every 10 steps with the end of their history, growing over the run |
-| `eval/*` | per eval step: clean commands (`eval/clean_commands`, v4), unique commands, plausible unique commands, reward mean and std, tier rates |
-| summary | `final_clean_commands` (v4 sweep metric), `final_unique_commands` (v2 sweep metric), `final_first3_commands` (v3 sweep metric, v3 runs only), `final_real_commands` (names in the documented KA3005P set), `final_median_name_length`, `final_plausible_unique_commands`, `gain_over_base` (in clean commands in v4), mean eval reward and tier rates, the discovery curve against the base model |
+| `eval/*` | per eval step: new commands, clean commands and hack share (v5; in v4 `eval/clean_commands` was the list length), unique commands, plausible unique commands, reward mean and std, tier rates |
+| summary | `final_new_commands` (v5 sweep metric), `final_clean_commands` and `final_hack_share` (v5; in v4 `final_clean_commands` was the list length and the sweep metric), `base_final_*`, `gain_over_base` and `clean_gain_over_base` (v5), `final_unique_commands` (v2 sweep metric), `final_first3_commands` (v3 sweep metric, v3 runs only), `final_real_commands` (names in the documented KA3005P set), `final_median_name_length`, `final_plausible_unique_commands`, `gain_over_base` (in clean commands in v4), mean eval reward and tier rates, the discovery curve against the base model |
 
 The eval reward scores each reply as a group of one, so a new command always gets the full +5 there.
 

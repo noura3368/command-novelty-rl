@@ -7,10 +7,17 @@ the fixed settings both come from wandb.config. Training curves go to the W&B ru
 through TRL: reward / reward_std, kl, entropy, and the tier and novelty metrics from
 reward.py, plus the `completions` table every step and the `samples` table every
 `sample_every` steps. The trained model is evaluated in memory with the same loop and
-settings as evaluate.py; per-step eval curves go under eval/, and the final values
-(`final_clean_commands`, the number of entries in each eval list, which the v4 sweep maximizes;
-`final_unique_commands`; ...) are logged at the end with the other summaries and the discovery curve next
-to the base model's. A `version` value in the sweep config (e.g. v4) is added as a run tag.
+settings as evaluate.py (list rule `exact`); per-step eval curves go under eval/, and the final
+values are logged at the end with the other summaries and the discovery curve next to the base
+model's:
+
+    final_new_commands     entries per eval list (list length; the v5 sweep metric)
+    final_clean_commands   the same lists without hacks (clean_histories.py's rules)
+    final_hack_share       1 - clean / new: the share of the lists that is hacked
+    base_final_*           the same for the base eval (`base_eval`), gain_over_base and
+                           clean_gain_over_base the differences
+
+A `version` value in the sweep config (e.g. v5) is added as a run tag.
 
 Files per trial: <out_dir>/<run id>/ holds the adapter, samples.jsonl and eval/.
 
@@ -31,7 +38,7 @@ from types import SimpleNamespace
 
 import wandb
 
-from evaluate import MAIN, evaluate_loaded, plot
+from evaluate import CLEAN, MAIN, evaluate_loaded, load_eval, plot
 from reward import TIERS
 from train_grpo import build_parser, train
 
@@ -100,7 +107,7 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
     eval_dir.mkdir(parents=True, exist_ok=True)
     eval_args = SimpleNamespace(target=c.target, interface=c.interface, episodes=c.eval_episodes,
                                 steps=c.eval_length, temperature=1.0, max_new_tokens=64,
-                                batch_size=c.batch_size, seed=c.seed, out_dir=eval_dir)
+                                batch_size=c.batch_size, seed=c.seed, list_rule="exact", out_dir=eval_dir)
     rows = evaluate_loaded(model, tok, f"{c.model} + {run.id}", "trained", eval_args)
 
     with open(eval_dir / "eval_steps.csv", "w", newline="", encoding="utf-8") as f:
@@ -112,7 +119,7 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
     wandb.define_metric("eval/*", step_metric="eval/step")
     for r in rows:
         wandb.log({"eval/step": r["step"], "eval/unique_commands": r["mean_unique_commands"],
-                   "eval/clean_commands": r[MAIN],
+                   "eval/new_commands": r[MAIN], "eval/clean_commands": r[CLEAN], "eval/hack_share": r["hack_share"],
                    "eval/plausible_unique_commands": r["mean_plausible_unique_commands"],
                    "eval/real_commands": r["mean_real_commands"],
                    "eval/median_name_length": r["median_name_length"],
@@ -122,13 +129,16 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
     labels, plot_rows, summary = ["trained"], list(rows), {}
     base_csv = Path(c.base_eval) if c.base_eval else None
     if base_csv and base_csv.exists():
-        with open(base_csv, encoding="utf-8") as f:
-            base = [{k: (v if k in ("label", "model", "list_rule") else float(v)) for k, v in r.items()}
-                    for r in csv.DictReader(f)]
+        base, b = load_eval(base_csv)
+        for r in base:
+            r["label"] = "base"
         labels, plot_rows = ["base", "trained"], base + plot_rows
         summary["base_final_unique_commands"] = base[-1]["mean_unique_commands"]
-        summary["base_final_clean_commands"] = base[-1][MAIN]
-        summary["gain_over_base"] = rows[-1][MAIN] - base[-1][MAIN]
+        summary["base_final_new_commands"] = b["new"]
+        summary["base_final_clean_commands"] = b["clean"]
+        summary["base_final_hack_share"] = b["hack_share"]
+        summary["gain_over_base"] = rows[-1][MAIN] - b["new"]
+        summary["clean_gain_over_base"] = rows[-1][CLEAN] - b["clean"]
     plot(plot_rows, labels, eval_dir / "discovery_curve.png")
 
     with open(eval_dir / "trained_histories.jsonl", encoding="utf-8") as f:
@@ -138,7 +148,9 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
 
     wandb.log({
         **summary,
-        "final_clean_commands": rows[-1][MAIN],
+        "final_new_commands": rows[-1][MAIN],
+        "final_clean_commands": rows[-1][CLEAN],
+        "final_hack_share": rows[-1]["hack_share"],
         "final_unique_commands": rows[-1]["mean_unique_commands"],
         "final_plausible_unique_commands": rows[-1]["mean_plausible_unique_commands"],
         "final_real_commands": rows[-1]["mean_real_commands"],

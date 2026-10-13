@@ -6,25 +6,26 @@ Each model explores exactly as in collect_histories.py (same prompt, same settin
 same seed): --episodes independent lists, one command per list per step. A reply is appended
 to its list if it parses and its name is new under --list-rule (parameters are never compared):
 
-    exact           (default) no entry has exactly the same command name; nothing else is checked.
-                    For baselines: every different name the model produces enters the list
+    exact           (default, v5) no entry has exactly the same command name; nothing else is
+                    checked, so every different name the model produces enters the list
     command_words   v4's rule: not wordy and no entry with the same reward.command_words
-                    (v4 sweep trials, wandb_trial.py, and prepare_sweep.sh's base eval use this one)
 
 Per step it records, averaged over the lists:
 
-    clean commands      entries in the list, so the list length. The main number
-    unique commands     distinct `command` strings in the list (raw, no word matching)
+    new commands        entries in the list, so the list length: what the v5 reward pays for. The main number
+    clean commands      the same lists recounted with clean_histories.py's rules (no wordy names, no
+                        repeats once case, separators and numbers are ignored): what is left without hacks
+    hack share          1 - clean / new over all entries of all lists: the share of the lists that is hacked
+    unique commands     distinct `command` strings in the list (equal to new commands under `exact`)
     plausible unique    the same, counting only commands that pass reward.plausible_syntax
     real commands       distinct names in the documented KA3005P set (reward.ka3005p_command)
     name length         median length of the names in the lists, in characters
-    tier rates          share of replies that were broken / wordy / repeat / new_structure,
-                        judged against the list before the reply by reward.py (v4's rules,
-                        whichever --list-rule built the list)
-    reward              mean and sd of the reward each reply would get as a group of one
+    tier rates          share of replies that were broken / repeat / new_structure,
+                        judged against the list before the reply by reward.py
+    reward              mean and sd of the reward each reply gets
 
 Writes <out-dir>/eval_steps.csv, <out-dir>/<label>_histories.jsonl (final lists),
-and <out-dir>/discovery_curve.png (clean commands).
+and <out-dir>/discovery_curve.png (new commands solid, clean commands dashed).
 
     python evaluate.py --models Qwen/Qwen2.5-7B-Instruct runs/round0/merged \\
         --labels base round0 --steps 100 --out-dir eval/round0
@@ -39,6 +40,7 @@ from pathlib import Path
 
 import torch
 
+from clean_histories import clean
 from collect_histories import LIST_RULES, load_model, run_episodes
 from reward import TIERS, ka3005p_command, plausible_syntax, score_group
 
@@ -47,7 +49,13 @@ COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
 SURFACE, TEXT, MUTED, GRID = "#fcfcfb", "#1a1a19", "#6b6a63", "#e6e5e0"
 
 
-MAIN = "mean_clean_commands"   # the eval's headline column
+MAIN = "mean_new_commands"     # the eval's headline column: list length
+CLEAN = "mean_clean_commands"  # the same lists without hacks (clean_histories.clean)
+
+
+def hack_share(new: list, clean_counts: list) -> float:
+    """Share of all list entries that clean_histories.clean removes; 0 for empty lists."""
+    return 1 - sum(clean_counts) / sum(new) if sum(new) else 0.0
 
 
 def default_label(model_id: str) -> str:
@@ -68,7 +76,7 @@ def evaluate_model(model_id, label, args):
 def evaluate_loaded(model, tok, model_id, label, args):
     """Run the loop with an already loaded model; write <label>_histories.jsonl and return the per-step rows."""
     torch.manual_seed(args.seed)
-    list_rule = getattr(args, "list_rule", "command_words")   # wandb_trial.py passes none: v4's rule
+    list_rule = getattr(args, "list_rule", "exact")
     rows, final = [], None
     for step, before, replies, after in run_episodes(model, tok, args.target, args.interface, args.episodes,
                                                      args.steps, args.temperature, args.max_new_tokens,
@@ -77,9 +85,12 @@ def evaluate_loaded(model, tok, model_id, label, args):
         tiers = [t for t, _, _ in scored]
         rewards = [r for _, r, _ in scored]
         unique = [len({x["command"] for x in h}) for h in after]
-        clean = [len(h) for h in after]
+        new = [len(h) for h in after]
+        kept = [len(clean(h)[0]) for h in after]
         row = {"label": label, "model": model_id, "list_rule": list_rule, "seed": args.seed, "step": step + 1,
-               "mean_clean_commands": statistics.mean(clean), "std_clean_commands": statistics.pstdev(clean)}
+               MAIN: statistics.mean(new), "std_new_commands": statistics.pstdev(new),
+               CLEAN: statistics.mean(kept), "std_clean_commands": statistics.pstdev(kept),
+               "hack_share": hack_share(new, kept)}
         row.update({
             "mean_unique_commands": statistics.mean(unique),
             "std_unique_commands": statistics.pstdev(unique),
@@ -96,13 +107,36 @@ def evaluate_loaded(model, tok, model_id, label, args):
         rows.append(row)
         final = after
         mem = f", {torch.cuda.max_memory_reserved() / 2**30:.1f} GB peak reserved" if torch.cuda.is_available() else ""
-        print(f"[{label}] step {step + 1}/{args.steps}: {row[MAIN]:.2f} clean commands, "
-              f"{row['mean_unique_commands']:.2f} unique names, {row['broken_rate']:.0%} broken{mem}", flush=True)
+        print(f"[{label}] step {step + 1}/{args.steps}: {row[MAIN]:.2f} new commands, {row[CLEAN]:.2f} clean "
+              f"({row['hack_share']:.0%} hacked), {row['broken_rate']:.0%} broken{mem}", flush=True)
 
     with open(args.out_dir / f"{label}_histories.jsonl", "w", encoding="utf-8") as f:
         for e, h in enumerate(final):
             f.write(json.dumps({"episode": e, "history": h}) + "\n")
     return rows
+
+
+def load_eval(csv_path: Path):
+    """(per-step rows, final summary) of a saved eval, e.g. a baseline for wandb_trial.py.
+
+    The summary (new, clean, hack share) is counted from the final lists in the *_histories.jsonl
+    next to the CSV when there is one, so it also works for CSVs written before v5. Those had no
+    new/clean split: their mean_clean_commands was the list length, and is read as new commands.
+    """
+    with open(csv_path, encoding="utf-8") as f:
+        rows = [{k: (v if k in ("label", "model", "list_rule") else float(v)) for k, v in r.items()}
+                for r in csv.DictReader(f)]
+    if rows and MAIN not in rows[0]:
+        for r in rows:
+            r[MAIN], r["std_new_commands"] = r.pop(CLEAN), r.pop("std_clean_commands")
+    summary = {"new": rows[-1][MAIN], "clean": rows[-1].get(CLEAN), "hack_share": rows[-1].get("hack_share")}
+    lists_file = next(iter(sorted(csv_path.parent.glob("*_histories.jsonl"))), None)
+    if lists_file is not None:
+        with open(lists_file, encoding="utf-8") as f:
+            lists = [json.loads(line)["history"] for line in f]
+        new, kept = [len(h) for h in lists], [len(clean(h)[0]) for h in lists]
+        summary = {"new": statistics.mean(new), "clean": statistics.mean(kept), "hack_share": hack_share(new, kept)}
+    return rows, summary
 
 
 def plot(rows, labels, path):
@@ -122,12 +156,14 @@ def plot(rows, labels, path):
         ax.fill_between(steps, [m - s for m, s in zip(mean, std)], [m + s for m, s in zip(mean, std)],
                         color=color, alpha=0.12, linewidth=0)
         ax.plot(steps, mean, color=color, linewidth=2, label=label)
+        if all(CLEAN in x for x in r):
+            ax.plot(steps, [x[CLEAN] for x in r], color=color, linewidth=1.5, linestyle="--")
         if len(labels) <= 4:
             ax.annotate(f"{label}  {mean[-1]:.1f}", (steps[-1], mean[-1]), xytext=(6, 0),
                         textcoords="offset points", va="center", fontsize=9, color=TEXT)
 
-    ax.set_title(f"Commands per list, list rule {rows[0]['list_rule']} (mean ± 1 sd across lists)", loc="left",
-                 fontsize=11, color=TEXT)
+    ax.set_title(f"Commands per list, list rule {rows[0]['list_rule']} (mean ± 1 sd across lists; "
+                 "dashed: without hacks)", loc="left", fontsize=11, color=TEXT)
     ax.set_xlabel("Step", color=MUTED)
     ax.set_ylabel("Commands in the list", color=MUTED)
     ax.set_ylim(bottom=0)
@@ -181,8 +217,8 @@ def main() -> int:
     for label in labels:
         r = [x for x in rows if x["label"] == label]
         broken = statistics.mean(x["broken_rate"] for x in r)
-        print(f"  {label}: {r[-1][MAIN]:.2f} clean commands per list; {r[-1]['mean_unique_commands']:.2f} unique names, "
-              f"{broken:.0%} broken overall")
+        print(f"  {label}: {r[-1][MAIN]:.2f} new commands per list, {r[-1][CLEAN]:.2f} without hacks "
+              f"({r[-1]['hack_share']:.0%} hacked); {broken:.0%} broken overall")
     print(f"Results in {args.out_dir}")
     return 0
 

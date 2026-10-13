@@ -85,8 +85,8 @@ def watch_rewards(reward_fn, log_path: Path):
 
     rewardspy's detectors look only at the reward numbers and completion lengths (variance collapse,
     slope breaks, ceiling, length drift), so they catch hacks that change those, such as v2's padding,
-    but not ones that earn +5 with ordinary-looking names, such as v3's counters; the tier rates
-    (wordy, repeat) are the direct signal for those. Its steps count completions, not training steps.
+    but not ones that earn +5 with ordinary-looking names, such as v3's counters; the eval's hack
+    share (wandb_trial.py) is the direct signal for those. Its steps count completions, not training steps.
     """
     from rewardspy.integrations import watch_trl
     watched = watch_trl(reward_fn, export_path=str(log_path), max_reward=REWARDS["new_structure"])
