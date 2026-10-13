@@ -3,17 +3,24 @@
 Compare how many different commands models find over a long run.
 
 Each model explores exactly as in collect_histories.py (same prompt, same settings,
-same seed): --episodes independent lists, one command per list per step, each reply that
-is neither broken, wordy nor a repeat appended to its list. Per step it records, averaged over the lists:
+same seed): --episodes independent lists, one command per list per step. A reply is appended
+to its list if it parses and its name is new under --list-rule (parameters are never compared):
 
-    clean commands      entries in the list: replies the reward scored as new (neither broken,
-                        wordy nor a repeat), so the list length. The main number
+    exact           (default) no entry has exactly the same command name; nothing else is checked.
+                    For baselines: every different name the model produces enters the list
+    command_words   v4's rule: not wordy and no entry with the same reward.command_words
+                    (v4 sweep trials, wandb_trial.py, and prepare_sweep.sh's base eval use this one)
+
+Per step it records, averaged over the lists:
+
+    clean commands      entries in the list, so the list length. The main number
     unique commands     distinct `command` strings in the list (raw, no word matching)
     plausible unique    the same, counting only commands that pass reward.plausible_syntax
     real commands       distinct names in the documented KA3005P set (reward.ka3005p_command)
     name length         median length of the names in the lists, in characters
     tier rates          share of replies that were broken / wordy / repeat / new_structure,
-                        judged against the list before the reply (same rules as reward.py)
+                        judged against the list before the reply by reward.py (v4's rules,
+                        whichever --list-rule built the list)
     reward              mean and sd of the reward each reply would get as a group of one
 
 Writes <out-dir>/eval_steps.csv, <out-dir>/<label>_histories.jsonl (final lists),
@@ -32,7 +39,7 @@ from pathlib import Path
 
 import torch
 
-from collect_histories import load_model, run_episodes
+from collect_histories import LIST_RULES, load_model, run_episodes
 from reward import TIERS, ka3005p_command, plausible_syntax, score_group
 
 # Categorical slots in fixed order (light surface); a model keeps its slot by position.
@@ -61,16 +68,17 @@ def evaluate_model(model_id, label, args):
 def evaluate_loaded(model, tok, model_id, label, args):
     """Run the loop with an already loaded model; write <label>_histories.jsonl and return the per-step rows."""
     torch.manual_seed(args.seed)
+    list_rule = getattr(args, "list_rule", "command_words")   # wandb_trial.py passes none: v4's rule
     rows, final = [], None
     for step, before, replies, after in run_episodes(model, tok, args.target, args.interface, args.episodes,
                                                      args.steps, args.temperature, args.max_new_tokens,
-                                                     args.batch_size):
+                                                     args.batch_size, list_rule):
         scored = [score_group([r], b)[0] for r, b in zip(replies, before)]
         tiers = [t for t, _, _ in scored]
         rewards = [r for _, r, _ in scored]
         unique = [len({x["command"] for x in h}) for h in after]
         clean = [len(h) for h in after]
-        row = {"label": label, "model": model_id, "step": step + 1,
+        row = {"label": label, "model": model_id, "list_rule": list_rule, "seed": args.seed, "step": step + 1,
                "mean_clean_commands": statistics.mean(clean), "std_clean_commands": statistics.pstdev(clean)}
         row.update({
             "mean_unique_commands": statistics.mean(unique),
@@ -118,10 +126,10 @@ def plot(rows, labels, path):
             ax.annotate(f"{label}  {mean[-1]:.1f}", (steps[-1], mean[-1]), xytext=(6, 0),
                         textcoords="offset points", va="center", fontsize=9, color=TEXT)
 
-    ax.set_title("Clean commands per list: distinct, not wordy (mean ± 1 sd across lists)", loc="left",
+    ax.set_title(f"Commands per list, list rule {rows[0]['list_rule']} (mean ± 1 sd across lists)", loc="left",
                  fontsize=11, color=TEXT)
     ax.set_xlabel("Step", color=MUTED)
-    ax.set_ylabel("Clean commands", color=MUTED)
+    ax.set_ylabel("Commands in the list", color=MUTED)
     ax.set_ylim(bottom=0)
     ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))
     ax.grid(axis="y", color=GRID, linewidth=0.8)
@@ -148,6 +156,8 @@ def main() -> int:
     ap.add_argument("--max-new-tokens", type=int, default=64)
     ap.add_argument("--batch-size", type=int, default=16, help="episodes generated at once on the GPU")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--list-rule", choices=LIST_RULES, default="exact",
+                    help="which replies enter a list (see above); default exact: any new command name")
     ap.add_argument("--out-dir", required=True)
     args = ap.parse_args()
 

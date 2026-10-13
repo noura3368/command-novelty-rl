@@ -36,6 +36,6 @@ fi
 if [ ! -f "$out/base_eval/eval_steps.csv" ]; then
     echo "Evaluating the base model"
     python -u evaluate.py --models "$model" --labels base --episodes 30 --steps 150 --batch-size "$batch" --seed 0 \
-        --out-dir "$out/base_eval"
+        --list-rule command_words --out-dir "$out/base_eval"
 fi
 echo "Ready: $out/histories.jsonl and $out/base_eval/eval_steps.csv"

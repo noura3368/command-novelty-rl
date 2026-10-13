@@ -35,13 +35,27 @@ def load_model(model_id: str):
     return model, tok
 
 
+LIST_RULES = ("command_words", "exact")
+
+
+def is_new(name: str, history: list, list_rule: str = "command_words") -> bool:
+    """Whether a parsed reply's command name is appended to its history (parameters are never compared).
+
+    command_words (v4): not wordy and no entry with the same command_words.
+    exact: no entry with exactly the same command name; nothing else is checked.
+    """
+    if list_rule == "exact":
+        return all(x["command"] != name for x in history)
+    return not wordy(name) and all(command_words(x["command"]) != command_words(name) for x in history)
+
+
 def run_episodes(model, tok, target, interface, episodes, steps, temperature=1.0, max_new_tokens=64,
-                 batch_size=16):
+                 batch_size=16, list_rule="command_words"):
     """Explore from empty histories, one command per episode per step.
 
     Yields (step, before, replies, after) once per step: the histories before the step,
-    the raw replies, and the histories after each parseable reply that is neither wordy nor a
-    repeat (same command_words as an entry already in its episode's history) has been appended.
+    the raw replies, and the histories after each parseable reply whose name is_new under
+    list_rule has been appended.
     """
     histories = [[] for _ in range(episodes)]
     for step in range(steps):
@@ -58,7 +72,7 @@ def run_episodes(model, tok, target, interface, episodes, steps, temperature=1.0
 
         for h, reply in zip(histories, replies):
             p = parse_completion(reply)
-            if p is None or wordy(p[0]) or any(command_words(x["command"]) == command_words(p[0]) for x in h):
+            if p is None or not is_new(p[0], h, list_rule):
                 continue
             h.append({"command": p[0], "parameters": p[1]})
         # Prompts grow every step, so cached blocks from earlier steps rarely fit later ones. On a GB10,

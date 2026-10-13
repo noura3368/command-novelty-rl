@@ -123,7 +123,8 @@ def evaluate_and_log(run, model, tok, c, out, rescored=False):
     base_csv = Path(c.base_eval) if c.base_eval else None
     if base_csv and base_csv.exists():
         with open(base_csv, encoding="utf-8") as f:
-            base = [{k: (v if k in ("label", "model") else float(v)) for k, v in r.items()} for r in csv.DictReader(f)]
+            base = [{k: (v if k in ("label", "model", "list_rule") else float(v)) for k, v in r.items()}
+                    for r in csv.DictReader(f)]
         labels, plot_rows = ["base", "trained"], base + plot_rows
         summary["base_final_unique_commands"] = base[-1]["mean_unique_commands"]
         summary["base_final_clean_commands"] = base[-1][MAIN]
