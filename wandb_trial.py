@@ -67,6 +67,10 @@ def main() -> int:
     trainer = train(args)
 
     model = trainer.model.merge_and_unload().eval()
+    # Trained with eager attention (train_grpo.py --attn-implementation); evaluate with SDPA like the base
+    # model (collect_histories.load_model). Eager's memory grows with the square of the prompt, and long
+    # eval lists ran a 3B trial out of memory; the eval computes no gradients, so SDPA's NaN does not apply.
+    model.set_attn_implementation("sdpa")
     tok = trainer.processing_class
     tok.padding_side = "left"
     if tok.pad_token is None:
