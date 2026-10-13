@@ -19,11 +19,19 @@ With --report-to wandb, --log-completions adds TRL's per-step completions table 
 completion's tier and parsed command) and --sample-every N adds a `samples` table holding two
 whole groups every N steps; see make_reward_fn in reward.py for the extra metrics.
 
+rewardspy watches every reward as an early warning for reward hacking (see watch_rewards):
+each reward and completion length goes to <output_dir>/rewardspy.jsonl, new alerts are
+printed, and each detector's state is logged as rewardspy/<detector>. Check a run with
+
+    rewardspy audit <output_dir>/rewardspy.jsonl --max-reward 5          # exits 1 if anything was flagged
+    rewardspy show <output_dir>/rewardspy.jsonl --follow                # live dashboard while it trains
+
 A checkpoint is saved every --save-steps steps. If a run stops, rerun the same command
 with --resume to continue from the latest one.
 """
 
 import argparse
+import functools
 import json
 from pathlib import Path
 
@@ -32,7 +40,9 @@ from datasets import Dataset
 from trl import GRPOConfig, GRPOTrainer
 
 from prompting import build_messages
-from reward import SIM_THRESHOLD, make_reward_fn
+from reward import REWARDS, make_reward_fn
+
+DETECTOR_STATE = {"OK": 0, "WARNING": 1, "ALERT": 2}   # rewardspy/<detector>; no value until it has enough data
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,8 +57,6 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--lr", type=float, default=None, help="default 1e-6, or 1e-5 with --lora")
     ap.add_argument("--beta", type=float, default=0.04, help="KL penalty to the base model")
-    ap.add_argument("--sim-threshold", type=float, default=SIM_THRESHOLD,
-                    help="ROUGE-L at or above which a command is a near-duplicate of a history command (reward.py)")
     ap.add_argument("--batch-size", type=int, default=8, help="completions per device per step")
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--generation-batch-size", type=int, default=None,
@@ -70,6 +78,31 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
     return ap
+
+
+def watch_rewards(reward_fn, log_path: Path):
+    """reward_fn with rewardspy watching it; the rewards are unchanged.
+
+    rewardspy's detectors look only at the reward numbers and completion lengths (variance collapse,
+    slope breaks, ceiling, length drift), so they catch hacks that change those, such as v2's padding,
+    but not ones that earn +5 with ordinary-looking names, such as v3's counters; the tier rates
+    (wordy, repeat) are the direct signal for those. Its steps count completions, not training steps.
+    """
+    from rewardspy.integrations import watch_trl
+    watched = watch_trl(reward_fn, export_path=str(log_path), max_reward=REWARDS["new_structure"])
+    watched.engine.callbacks.append(
+        lambda a: print(f"rewardspy {a.status} ({a.detector}) at completion {a.step}: {a.message}", flush=True))
+
+    @functools.wraps(reward_fn)
+    def fn(*args, log_metric=None, **kwargs):
+        rewards = watched(*args, log_metric=log_metric, **kwargs)
+        if log_metric is not None:
+            for name, result in watched.engine.latest.items():
+                if result.status.value in DETECTOR_STATE:
+                    log_metric(f"rewardspy/{name}", DETECTOR_STATE[result.status.value])
+        return rewards
+
+    return fn
 
 
 def train(args) -> GRPOTrainer:
@@ -116,8 +149,8 @@ def train(args) -> GRPOTrainer:
                                  task_type="CAUSAL_LM")
     trainer = GRPOTrainer(
         model=args.model,
-        reward_funcs=make_reward_fn(out / "samples.jsonl", sample_every=args.sample_every,
-                                    threshold=args.sim_threshold),
+        reward_funcs=watch_rewards(make_reward_fn(out / "samples.jsonl", sample_every=args.sample_every),
+                                   out / "rewardspy.jsonl"),
         args=config,
         train_dataset=dataset,
         peft_config=peft_config,

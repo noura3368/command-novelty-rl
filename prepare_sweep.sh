@@ -2,7 +2,8 @@
 # Build the inputs a W&B sweep needs:
 #   <out_dir>/histories.jsonl            shared training prompts (collect_histories.py, 64 lists x 150 steps),
 #                                        collected by <collector> (default: the base model itself)
-#   <out_dir>/base_eval/eval_steps.csv   the base model's reference curve (evaluate.py, same settings as the trials)
+#   <out_dir>/base_eval/eval_steps.csv   the base model's reference curve (evaluate.py, same settings as the trials
+#                                        but 30 lists instead of 16, for a steadier baseline)
 # Each step is skipped if its output already exists, so it is safe to rerun.
 # batch_size (default 16) is how many lists are generated at once; use the sweep YAML's batch_size.
 # v3 collected with a trained v2 model, merged first with merge_adapter.py. v4 reuses the pooled v3
@@ -30,10 +31,11 @@ if [ ! -f "$out/histories.jsonl" ]; then
     mv "$out/histories.partial.jsonl" "$out/histories.jsonl"
 fi
 
-# Keep these in step with eval_episodes / eval_length / batch_size / seed in sweep_*.yaml.
+# Keep --steps / batch_size / seed in step with eval_length / batch_size / seed in sweep_*.yaml. The base
+# eval has 30 lists, the trials eval_episodes (16); gain_over_base compares their means.
 if [ ! -f "$out/base_eval/eval_steps.csv" ]; then
     echo "Evaluating the base model"
-    python -u evaluate.py --models "$model" --labels base --episodes 16 --steps 150 --batch-size "$batch" --seed 0 \
+    python -u evaluate.py --models "$model" --labels base --episodes 30 --steps 150 --batch-size "$batch" --seed 0 \
         --out-dir "$out/base_eval"
 fi
 echo "Ready: $out/histories.jsonl and $out/base_eval/eval_steps.csv"

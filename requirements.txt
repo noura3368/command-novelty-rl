@@ -12,5 +12,7 @@ matplotlib
 wandb==0.30.0
 pandas
 rich
+# reward-hacking early warnings in train_grpo.py; not on PyPI, so pinned to a GitHub commit
+rewardspy @ git+https://github.com/AvAdiii/rewardspy@3d76d0e57e6f3914a6b5d32f9e0507c644b646df
 # optional, for --use-vllm
 # vllm

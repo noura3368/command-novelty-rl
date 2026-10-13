@@ -1,8 +1,8 @@
 # v4 W&B sweep for Qwen2.5-7B (see README, "v4"). Changes from v3:
-#   - reward judges command names by ROUGE-L over their words (reward.command_words):
-#     broken -10, repeat -6, near-duplicate (ROUGE-L >= 0.7) -3, new +5
+#   - reward judges command names by their words (reward.command_words):
+#     broken -10, wordy (2+ connector words) -6, repeat -6, new +5; no ROUGE-L
 #   - training prompts: the pooled, deduplicated v3 prompts of both models (same file for 3B and 7B)
-#   - maximizes final_distinct_t70 (distinct commands at ROUGE-L 0.7); 0.5 ... 0.9 are logged too
+#   - maximizes final_clean_commands (eval list length: replies neither broken, wordy nor a repeat)
 #   - search ranges back to v2's
 #   ./prepare_sweep.sh Qwen/Qwen2.5-7B-Instruct sweeps/7b-v4 16     # base-model eval (histories.jsonl copied in first)
 #   wandb sweep sweep_7b_v4.yaml
@@ -12,7 +12,7 @@ project: command-novelty-rl
 name: qwen2.5-7b-v4
 method: bayes
 metric:
-  name: final_distinct_t70
+  name: final_clean_commands
   goal: maximize
 command:
   - ${env}
@@ -35,8 +35,6 @@ parameters:
   num_generations:
     values: [4, 8, 16]                    # GRPO group size; 32 completions per step either way
   # fixed: the same in every trial
-  sim_threshold:                          # reward's near-duplicate threshold; the eval always uses 0.7
-    value: 0.7
   model:
     value: Qwen/Qwen2.5-7B-Instruct
   target:
